@@ -1,29 +1,31 @@
 import signal
 import threading
+from typing import Optional, TypedDict
 from src.utils.managed_process import ManagedProcess
 import logging
 
 logger = logging.getLogger("tunnel_manager")
 
+class Tunnel(TypedDict):
+    thread: threading.Thread
+    connection_id: str
+    process: Optional[ManagedProcess]
 
 class TunnelManager:
     def __init__(self):
-        self.tunnels = {}
+        self.tunnels: dict[str, Tunnel] = {}
         self._lock = threading.RLock()
         self._shutdown_flag = threading.Event()
 
-    def start_tunnel(self, tunnel_id, connection_id, *cmd):
+    def start_tunnel(self, connection_id, *cmd):
         def tunnel_thread():
             try:
                 with ManagedProcess(cmd) as mp:
                     logger.info(f"[{tunnel_id}] Tunnel process started with PID {mp.pid}")
                     self.register_process(tunnel_id, mp)
                     for line in mp.iter_stdout():
-                        print("Looped!")
-                        if self._shutdown_flag.is_set():
-                            logger.info(f"[{tunnel_id}] Shutdown flag detected, exiting tunnel thread early.")
-                            break
-                        logger.info(f"[{tunnel_id}] {line.strip()}")
+                        line = line.strip()
+                        logger.info(f"[{tunnel_id}] {line}")
                         if self._shutdown_flag.is_set() and mp.returncode is None:
                             logger.info(f"[{tunnel_id}] Terminating process due to shutdown flag.")
                             mp.terminate()
@@ -37,8 +39,9 @@ class TunnelManager:
                     self.tunnels.pop(tunnel_id, None)
 
         thread = threading.Thread(target=tunnel_thread, daemon=True)
+        tunnel_id = f"{connection_id}-{thread.ident}" # Prevent ID collision even though it must not happen, since only one tunnel per connection_id is allowed, but if somehow the code allows for it, we need to allow killing the correct tunnel
         with self._lock:
-            self.tunnels[tunnel_id] = {'thread': thread, 'connection_id': connection_id}
+            self.tunnels[tunnel_id] = {'thread': thread, 'connection_id': connection_id, 'process': None}
         thread.start()
 
     def has_tunnel_for_connection(self, connection_id):
@@ -49,11 +52,16 @@ class TunnelManager:
     def stop_tunnel(self, tunnel_id):
         with self._lock:
             tunnel = self.tunnels.get(tunnel_id)
-            has_process = tunnel is not None and 'process' in tunnel and tunnel['process'] is not None
-            if tunnel and has_process:
+            if not tunnel:
+                logger.warning(f"[{tunnel_id}] Attempted to stop non-existent tunnel.")
+                return
+            process = tunnel['process'] if tunnel else None
+            if process:
                 logger.info(f"[{tunnel_id}] Terminating process...")
-                tunnel['process'].terminate()
+                process.terminate()
                 logger.info(f"[{tunnel_id}] Termination signal sent.")
+            else:
+                logger.warning(f"[{tunnel_id}] No process found to terminate.")
 
     def register_process(self, tunnel_id, process):
         with self._lock:
@@ -102,19 +110,30 @@ class TunnelManager:
                     )
                 if thread is not None:
                     logger.info(f"[{tunnel_id}] Attempting to join tunnel thread...")
-                    thread.join(timeout=3)
+                    # thread.join(timeout=3) No need to wait since the thread is not writing
                     if thread.is_alive():
-                        logger.warning(
-                            f"[{tunnel_id}] Tunnel thread is still alive after join. Possible hang. Attempting to kill process if possible."
-                        )
                         if process:
+                            logger.warning(f"[{tunnel_id}] Tunnel thread still active. Terminating forcefully.")
                             process.kill()
+                            thread.join(timeout=1) # Wait a moment for thread to exit after kill
                             if thread.is_alive():
-                                logger.warning(
-                                    f"[{tunnel_id}] Tunnel thread is still alive after process kill. Manual intervention may be required."
-                                )
+                                logger.warning(f"[{tunnel_id}] Tunnel did not terminate. Terminate the app.")
                             else:
-                                logger.info(f"[{tunnel_id}] Tunnel thread terminated after process kill.")
-                            
+                                logger.info(f"[{tunnel_id}] Tunnel was forcefully terminated.")
+                        else:
+                            logger.warning(f"[{tunnel_id}] Tunnel not linked to a process. Dangling thread! Terminate the app.")
                     else:
                         logger.info(f"[{tunnel_id}] Tunnel thread joined successfully.")
+
+    def get_output(self, tunnel_id):
+        with self._lock:
+            tunnel = self.tunnels.get(tunnel_id)
+            if not tunnel:
+                logger.warning(f"[{tunnel_id}] Attempted to get output for non-existent tunnel.")
+                return None
+            process = tunnel.get('process')
+            if not process:
+                logger.warning(f"[{tunnel_id}] No process registered for tunnel when getting output.")
+                return None
+            
+            return process.output or []

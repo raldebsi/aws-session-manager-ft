@@ -7,8 +7,7 @@ from src.common import tunnel_manager
 cmd_logger = logging.getLogger("cmd_logger")
 
 def setup_kubeconfig(profile, cluster_name, region):
-    logger.info(f"Updating kubeconfig for {cluster_name}")
-
+    logger.info(f"Updating kubeconfig for {cluster_name} in {region} as {profile}")
     cmd = [
         "aws", "eks", "update-kubeconfig",
         "--name", cluster_name,
@@ -55,7 +54,6 @@ def start_eks_tunnel_shell(
     ):
     logger.info(f"Starting EKS Tunnel for {cluster_name}")
 
-    logger.info(f"Updating kubeconfig for {cluster_name} as {profile} in {region}")
     if not setup_kubeconfig(profile, cluster_name, region):
         logger.error(f"Failed to update kubeconfig for {cluster_name}. Aborting tunnel setup.")
         return None
@@ -79,8 +77,6 @@ def start_eks_tunnel_shell(
         f'{{"host":["{endpoint}"],"portNumber":["{remote_port}"],"localPortNumber":["{local_port}"]}}',
     ]
 
-    random_suffix = threading.get_ident()  # Using thread ID as a simple unique suffix
-    tunnel_id = f"{connection_id}-{random_suffix}"
-    tunnel_manager.start_tunnel(tunnel_id, connection_id, *cmd)
+    tunnel_id = tunnel_manager.start_tunnel(connection_id, *cmd)
     logger.info(f"Tunnel started with id: {tunnel_id}")
     return tunnel_id

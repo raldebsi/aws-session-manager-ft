@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from src.utils import ensure_elevated_privileges
 from src.utils.data_loaders import load_user_config, load_connections
 from src.models.config import SSMUserConfig, SSMConnectionConfig
@@ -71,6 +72,20 @@ def main():
             local_port=mapped.local_port,
             remote_port=mapped.connection.remote_port
         )
+        timeout = 15
+        time_now = time.time()
+        found = False
+        while not found:
+            output = tunnel_manager.get_output(tunnel_id)
+            for line in output or []:
+                if "Waiting for connections" in line:
+                    found = True
+                    break
+            if time.time() - time_now > timeout:
+                logger.error("Timeout waiting for tunnel to start.")
+                break
+            time.sleep(1)
+        print("Tunnel started successfully. Verifying Kubernetes connection...")
         if tunnel_id:
             try:
                 nodes = get_k8s_nodes()

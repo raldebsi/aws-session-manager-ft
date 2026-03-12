@@ -104,13 +104,9 @@ def check_hosts_entry(endpoint: str) -> Optional[str]:
         con2 = con2.strip().lower()
         if con2 == endpoint.lower():
             if con1 in ["localhost", "127.0.0.1"]:
-                logger.info(
-                    f"Hosts file already contains entry for {endpoint} → {con1}"
-                )
+                logger.info(f"Hosts file already contains entry for {endpoint} → {con1}")
                 return con1
-            raise ValueError(
-                f"Hosts file contains entry for {endpoint} but it is not localhost or 127.0.0.1"
-            )
+            raise ValueError(f"Hosts file contains entry for {endpoint} but it is not localhost or 127.0.0.1")
 
     return None
 
@@ -118,7 +114,6 @@ def update_hosts(endpoint: str):
     hosts_path = get_hosts_path()
 
     if check_hosts_entry(endpoint):
-        logger.info(f"No update needed for hosts file → {endpoint}")
         return
 
     entry = f"127.0.0.1 {endpoint}\n"
