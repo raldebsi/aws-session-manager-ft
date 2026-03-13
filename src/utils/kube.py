@@ -19,13 +19,23 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
     edits = 0
     maps = []
 
-    for cluster in config.get('clusters', []):
+    # Scan clusters to see if any has the same name as the cluster_alias and save its index
+    existing_idx = None
+    if cluster_alias:
+        for idx, cluster in enumerate(config.get('clusters', [])):
+            if cluster.get('name') == cluster_alias:
+                existing_idx = idx
+                break
+
+    for idx, cluster in enumerate(config.get('clusters', [])):
+        if existing_idx and idx != existing_idx:
+            continue # If cluster_alias is provided, only edit the cluster that matches the alias, if it exists, otherwise edit all clusters that match the server
         if 'cluster' in cluster and 'server' in cluster['cluster']:
             connection_name = cluster.get('name')
             if not connection_name:
                 logger.warning(f"Cluster entry missing 'name': {cluster}. Skipping.")
-            server = cluster['cluster']['server']
-            protocol, server = server.split("://", 1) if "://" in server else ("", server)
+            original_server = cluster['cluster']['server']
+            protocol, server = original_server.split("://", 1) if "://" in original_server else ("", original_server)
             if ':' in server:
                 host, existing_port = server.rsplit(':', 1)
                 if host.lower() != local_server.lower():
@@ -34,21 +44,28 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
                     logger.warning(f"Unexpected server format (port is not a number): {server}. Skipping.")
                     continue
                 if int(existing_port) == int(local_port):
-                    logger.info(f"Server {server} already uses local port {local_port}. No change needed.")
-                    continue
+                    logger.info(f"Server {server} already uses local port {local_port}.")
+                    # Continue anyway to allow name remapping in context
                 logger.info(f"Updating kubeconfig server port from {existing_port} to {local_port}")
+                server = host
             else:
                 if server.lower() != local_server.lower():
+                    continue
+
+            if connection_name and ('aws:eks:' not in connection_name or ':cluster/' not in connection_name):
+                # Only allow clusters that use default name
+                if existing_idx and connection_name != cluster_alias:
+                    logger.info("Skipping cluster with custom name")
                     continue
 
             new_server = f"{server}:{local_port}"
             if protocol:
                 new_server = f"{protocol}://{new_server}"
             
-            logger.info(f"Updating kubeconfig server from {server} to {new_server}")
+            logger.info(f"Updating kubeconfig server from {original_server} to {new_server}")
 
             cluster['cluster']['server'] = new_server
-            if cluster_alias and cluster_alias != connection_name: # To rename if alias mismatch
+            if cluster_alias: # To rename if alias mismatch
                 cluster['name'] = cluster_alias
                 maps.append(connection_name)
             edits += 1
@@ -56,9 +73,8 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
     # rename contexts that match the cluster name if cluster_alias is provided
     if maps:
         for context in config.get('contexts', []):
-            context_cluster = context.get('context', {}).get('cluster')
-            if context_cluster in maps:
-                context_name = context.get('name')
+            context_name = context.get('name')
+            if context_name in maps:
                 old_name = context['context']['cluster']
                 context['context']['cluster'] = cluster_alias
                 logger.info(f"Renamed cluster in '{context_name}' from '{old_name}' to '{cluster_alias}'")
