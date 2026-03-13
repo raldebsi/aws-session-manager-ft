@@ -16,76 +16,112 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    edits = 0
-    maps = []
-
-    # Scan clusters to see if any has the same name as the cluster_alias and save its index
-    existing_idx = None
-    if cluster_alias:
-        for idx, cluster in enumerate(config.get('clusters', [])):
-            if cluster.get('name') == cluster_alias:
-                existing_idx = idx
-                break
+    cluster_table = {}
+    edited = None
+    edit_candidate_indices = {
+        "no_port": [],
+        "same_port": [],
+        "same_name": [],
+    }
 
     for idx, cluster in enumerate(config.get('clusters', [])):
-        if existing_idx and idx != existing_idx:
-            continue # If cluster_alias is provided, only edit the cluster that matches the alias, if it exists, otherwise edit all clusters that match the server
-        if 'cluster' in cluster and 'server' in cluster['cluster']:
-            connection_name = cluster.get('name')
-            if not connection_name:
-                logger.warning(f"Cluster entry missing 'name': {cluster}. Skipping.")
-            original_server = cluster['cluster']['server']
-            protocol, server = original_server.split("://", 1) if "://" in original_server else ("", original_server)
-            if ':' in server:
-                host, existing_port = server.rsplit(':', 1)
-                if host.lower() != local_server.lower():
-                    continue
-                if not existing_port.isdigit():
-                    logger.warning(f"Unexpected server format (port is not a number): {server}. Skipping.")
-                    continue
-                if int(existing_port) == int(local_port):
-                    logger.info(f"Server {server} already uses local port {local_port}.")
-                    # Continue anyway to allow name remapping in context
-                logger.info(f"Updating kubeconfig server port from {existing_port} to {local_port}")
-                server = host
+        cluster_name = cluster.get("name")
+        cluster_server = cluster.get("cluster", {}).get("server")
+        if "://" in cluster_server:
+            cluster_protocol, cluster_host = cluster_server.split("://", 1)
+        else:
+            cluster_protocol = None
+            cluster_host = cluster_server
+
+        if ":" in cluster_host:
+            cluster_host, cluster_port = cluster_host.rsplit(":", 1)
+            if not cluster_port.isdigit():
+                logger.warning(f"Unexpected server format (port is not a number): {cluster_host}. Skipping.")
+                continue
+        else:
+            cluster_port = None
+
+        is_aws_default_name = cluster_name and cluster_name.startswith("arn:aws:eks:") and ":cluster/" in cluster_name
+        has_same_port = int(cluster_port) == int(local_port) if cluster_port else False
+        has_same_name = cluster_name == cluster_alias if cluster_alias else False
+        has_same_server = cluster_host.lower() == local_server.lower()
+
+        new_server_name = f"{local_server}:{local_port}"
+        if cluster_protocol:
+            new_server_name = f"{cluster_protocol}://{new_server_name}"
+
+        cluster_table[idx] = {
+            "name": cluster_name,
+            "server": cluster_server,
+            "protocol": cluster_protocol,
+            "host": cluster_host,
+            "port": cluster_port,
+            "is_aws_default_name": is_aws_default_name,
+            "has_same_port": has_same_port,
+            "has_same_name": has_same_name,
+            "has_same_server": has_same_server,
+            "new_server_name": new_server_name,
+        }
+
+        if not has_same_server:
+            continue
+
+        # if has same name then overwrite
+        if has_same_name:
+            edit_candidate_indices["same_name"].append(idx)
+            continue
+        elif not is_aws_default_name:
+            # Do not edit ones with custom names
+            continue
+
+        # if has same port, then overwrite name, if different port but port is not 443, leave it as it is
+        if has_same_server:
+            if has_same_port:
+                edit_candidate_indices["same_port"].append(idx)
+                continue
             else:
-                if server.lower() != local_server.lower():
+                if cluster_port:
+                    if int(cluster_port) != 443:
+                        continue  # Different port, leave it
+                else:
+                    edit_candidate_indices["same_port"].append(idx)
+                    # Do not edit it now, wait until other higher priority target is found, else edit
                     continue
 
-            if connection_name and ('aws:eks:' not in connection_name or ':cluster/' not in connection_name):
-                # Only allow clusters that use default name
-                if existing_idx and connection_name != cluster_alias:
-                    logger.info("Skipping cluster with custom name")
-                    continue
+    # Priority: Same Name, Same Port, No Port
+    edit_indices = (
+        edit_candidate_indices["same_name"] +
+        edit_candidate_indices["same_port"] +
+        edit_candidate_indices["no_port"]
+    )
+    if not edit_indices:
+        logger.error("No matching clusters found or all clusters are edited")
+        return False
+    
+    next_idx = edit_indices[0]
+    cluster_info = cluster_table[next_idx]
+    cluster = config["clusters"][next_idx]
 
-            new_server = f"{server}:{local_port}"
-            if protocol:
-                new_server = f"{protocol}://{new_server}"
-            
-            logger.info(f"Updating kubeconfig server from {original_server} to {new_server}")
-
-            cluster['cluster']['server'] = new_server
-            if cluster_alias: # To rename if alias mismatch
-                cluster['name'] = cluster_alias
-                maps.append(connection_name)
-            edits += 1
+    new_server_name = cluster_info["new_server_name"]
+    cluster["cluster"]["server"] = new_server_name
+    if cluster_alias:
+        cluster["name"] = cluster_alias
+        edited = cluster_alias
 
     # rename contexts that match the cluster name if cluster_alias is provided
-    if maps:
+    if edited:
         for context in config.get('contexts', []):
             context_name = context.get('name')
-            if context_name in maps:
+            if context_name == edited:
                 old_name = context['context']['cluster']
                 context['context']['cluster'] = cluster_alias
                 logger.info(f"Renamed cluster in '{context_name}' from '{old_name}' to '{cluster_alias}'")
-                edits += 1
 
-    if edits or maps:
-        logger.info("Saving updated kubeconfig with local port changes.")
-        with open(config_path, 'w') as f:
-            yaml.safe_dump(config, f)
+    logger.info("Saving updated kubeconfig with local port changes.")
+    with open(config_path, 'w') as f:
+        yaml.safe_dump(config, f)
 
-    return edits
+    return True
 
 def setup_kubeconfig(profile, cluster_name, region, context_alias = None):
     logger.info(f"Updating kubeconfig for {cluster_name} in {region} as {profile}")
