@@ -23,13 +23,23 @@ class TunnelManager:
                 with ManagedProcess(cmd) as mp:
                     logger.info(f"[{tunnel_id}] Tunnel process started with PID {mp.pid}")
                     self.register_process(tunnel_id, mp)
-                    for line in mp.iter_stdout():
-                        line = line.strip()
-                        logger.info(f"[{tunnel_id}] {line}")
-                        if self._shutdown_flag.is_set() and mp.returncode is None:
-                            logger.info(f"[{tunnel_id}] Terminating process due to shutdown flag.")
-                            mp.terminate()
-                    logger.info(f"[{tunnel_id}] Tunnel process stdout loop ended.")
+
+                    def log_stream(stream_iter, stream_name):
+                        for line in stream_iter:
+                            line = line.strip()
+                            logger.info(f"[{tunnel_id}][{stream_name}] {line}")
+                            if self._shutdown_flag.is_set() and mp.returncode is None:
+                                logger.info(f"[{tunnel_id}] Terminating process due to shutdown flag.")
+                                mp.terminate()
+
+                    stdout_thread = threading.Thread(target=log_stream, args=(mp.iter_stdout(), 'stdout'), daemon=True)
+                    stderr_thread = threading.Thread(target=log_stream, args=(mp.iter_stderr(), 'stderr'), daemon=True)
+                    stdout_thread.start()
+                    stderr_thread.start()
+
+                    stdout_thread.join()
+                    stderr_thread.join()
+                    logger.info(f"[{tunnel_id}] Tunnel process output threads ended.")
                     mp.wait()
                     logger.info(f"[{tunnel_id}] Tunnel finished with code {mp.returncode}")
             except Exception as e:
@@ -43,6 +53,7 @@ class TunnelManager:
         with self._lock:
             self.tunnels[tunnel_id] = {'thread': thread, 'connection_id': connection_id, 'process': None}
         thread.start()
+        return tunnel_id
 
     def has_tunnel_for_connection(self, connection_id):
         """Return True if a tunnel exists for the given connection_id."""
@@ -116,6 +127,7 @@ class TunnelManager:
                             logger.warning(f"[{tunnel_id}] Tunnel thread still active. Terminating forcefully.")
                             process.kill()
                             thread.join(timeout=1) # Wait a moment for thread to exit after kill
+                            # It is possible that stdout and stderr flush after kill so we need to let them join in case
                             if thread.is_alive():
                                 logger.warning(f"[{tunnel_id}] Tunnel did not terminate. Terminate the app.")
                             else:
@@ -126,14 +138,26 @@ class TunnelManager:
                         logger.info(f"[{tunnel_id}] Tunnel thread joined successfully.")
 
     def get_output(self, tunnel_id):
+        return self.get_output_stream(tunnel_id, 'stdout')
+
+    def get_errors(self, tunnel_id):
+        return self.get_output_stream(tunnel_id, 'stderr')
+        
+    def get_output_stream(self, tunnel_id, stream_name):
         with self._lock:
             tunnel = self.tunnels.get(tunnel_id)
             if not tunnel:
-                logger.warning(f"[{tunnel_id}] Attempted to get output for non-existent tunnel.")
+                logger.warning(f"[{tunnel_id}] Attempted to get output stream for non-existent tunnel.")
                 return None
             process = tunnel.get('process')
             if not process:
-                logger.warning(f"[{tunnel_id}] No process registered for tunnel when getting output.")
+                logger.warning(f"[{tunnel_id}] No process registered for tunnel when getting output stream.")
                 return None
             
-            return process.output or []
+            if stream_name == 'stdout':
+                return process.output
+            elif stream_name == 'stderr':
+                return process.errors
+            else:
+                logger.error(f"[{tunnel_id}] Invalid stream name '{stream_name}' requested.")
+                return None
