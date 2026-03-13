@@ -60,7 +60,7 @@ def main():
             logger.error("Mapped connection is invalid.")
             continue
 
-        logger.info(f"Starting tunnel for {getattr(mapped, 'connection_name', None) or getattr(mapped, 'connection_id', None)}")
+        logger.info(f"Starting tunnel for {mapped.connection_name or mapped.connection_id}")
         tunnel_id = start_eks_tunnel(
             profile=mapped.profile,
             endpoint=mapped.connection.endpoint,
@@ -68,7 +68,6 @@ def main():
             cluster_name=mapped.connection.cluster,
             region=mapped.connection.region,
             tunnel_connection_id=connection_tunnel_name,
-            connection_id=mapped.connection.id,
             document_name=mapped.connection.document,
             local_port=mapped.local_port,
             remote_port=mapped.connection.remote_port,

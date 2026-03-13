@@ -179,7 +179,7 @@ def get_k8s_nodes():
 def start_eks_tunnel(
         profile,
         endpoint, bastion,
-        cluster_name, region, tunnel_connection_id: str, connection_id: Optional[str] = None,
+        cluster_name, region, tunnel_connection_id: str,
         document_name: str = "AWS-StartPortForwardingSessionToRemoteHost",
         local_port: int = 443, remote_port: int = 443,
         kubeconfig_path: Optional[str] = None,
