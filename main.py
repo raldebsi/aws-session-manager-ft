@@ -4,7 +4,7 @@ import time
 from src.utils import ensure_elevated_privileges
 from src.utils.data_loaders import load_user_config, load_connections
 from src.models.config import SSMUserConfig, SSMConnectionConfig
-from src.utils.kube import start_eks_tunnel_shell, get_k8s_nodes
+from src.utils.kube import start_eks_tunnel, get_k8s_nodes
 from src.common import tunnel_manager, logger
 
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
@@ -61,17 +61,20 @@ def main():
             continue
 
         logger.info(f"Starting tunnel for {getattr(mapped, 'connection_name', None) or getattr(mapped, 'connection_id', None)}")
-        tunnel_id = start_eks_tunnel_shell(
+        tunnel_id = start_eks_tunnel(
             profile=mapped.profile,
             endpoint=mapped.connection.endpoint,
             bastion=mapped.bastion,
             cluster_name=mapped.connection.cluster,
             region=mapped.connection.region,
-            connection_id=connection_tunnel_name,
+            tunnel_connection_id=connection_tunnel_name,
+            connection_id=mapped.connection.id,
             document_name=mapped.connection.document,
             local_port=mapped.local_port,
-            remote_port=mapped.connection.remote_port
+            remote_port=mapped.connection.remote_port,
+            kubeconfig_path=mapped.kubeconfig_path,
         )
+
         timeout = 15
         time_now = time.time()
         found = False

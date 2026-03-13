@@ -7,4 +7,4 @@ __pycache__/
 config
 *.txt
 
-settings.*.json
+.claude
