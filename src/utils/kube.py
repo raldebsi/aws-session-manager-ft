@@ -166,11 +166,19 @@ def get_k8s_current_context():
     process.wait()
     return context
 
-def get_k8s_nodes():
+
+def get_k8s_nodes(context=None):
     """Get the list of Kubernetes nodes using kubectl."""
-    process = run_cmd(["kubectl", "get", "nodes", "-o", "name"])
+    cmd = ["kubectl", "get", "nodes", "-o", "name"]
+
+    if context:
+        cmd.extend(["--context", context])
+
+    process = run_cmd(cmd)
+
     if not process.stdout:
         return []
+
     nodes = [line.strip() for line in process.stdout if line.strip()]
     process.wait()
     return nodes
