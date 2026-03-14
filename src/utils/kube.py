@@ -4,8 +4,8 @@ import yaml
 
 from typing import Optional
 
-from src.utils.utils import logger, run_cmd, update_hosts
 from src.common import tunnel_manager
+from src.utils.utils import get_is_client_privileged, logger, run_cmd, update_hosts
 
 cmd_logger = logging.getLogger("cmd_logger")
 
@@ -231,6 +231,8 @@ def start_eks_tunnel(
 
     # Update hosts if necessary
     if not kubeconfig_path:
+        if not get_is_client_privileged():
+            raise PermissionError("No kubeconfig path provided and insufficient permissions to modify hosts file. Please run with elevated privileges or provide a kubeconfig path that can be modified.")
         update_hosts(endpoint) # Replace hosts when no control over kubeconfig (requires admin)
 
     if kubeconfig_path: # Update the config file
@@ -247,6 +249,26 @@ def start_eks_tunnel(
         if local_port != 443:
             logger.warning("No kubeconfig path provided, but local port is not default 443. Ensure your kubeconfig is configured to point to the correct local port.")
 
+    tunnel_id = start_ssm_tunnel(
+        profile=profile,
+        endpoint=endpoint,
+        bastion=bastion,
+        region=region,
+        tunnel_connection_id=tunnel_connection_id,
+        document_name=document_name,
+        local_port=local_port,
+        remote_port=remote_port,
+    )
+
+    return tunnel_id
+
+def start_ssm_tunnel(
+        profile,
+        endpoint, bastion,
+        region, tunnel_connection_id: str,
+        document_name: str = "AWS-StartPortForwardingSessionToRemoteHost",
+        local_port: int = 443, remote_port: int = 443,
+):
     cmd = [
         "aws",
         "ssm",
