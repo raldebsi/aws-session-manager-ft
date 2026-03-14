@@ -3,7 +3,7 @@ import time
 from flask import Blueprint, jsonify, request
 
 from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
-from src.utils.kube import start_eks_tunnel, get_k8s_nodes
+from src.utils.kube import k8s_health_check, start_eks_tunnel
 from src.utils.data_loaders import load_user_config, load_connections
 from src.models.config import SSMUserConfig, SSMConnectionConfig
 
@@ -90,11 +90,11 @@ def full_connect():
 
     # --- Step 4: Verify Kubernetes connectivity ---
     try:
-        nodes = get_k8s_nodes()
-        if nodes:
-            steps.append({"step": "verify_k8s", "status": "ok", "nodes": nodes})
+        health = k8s_health_check()
+        if health:
+            steps.append({"step": "verify_k8s", "status": "ok"})
         else:
-            steps.append({"step": "verify_k8s", "status": "warning", "message": "No nodes found"})
+            steps.append({"step": "verify_k8s", "status": "warning", "message": "Kubernetes health check failed"})
     except Exception as e:
         steps.append({"step": "verify_k8s", "status": "error", "message": str(e)})
 

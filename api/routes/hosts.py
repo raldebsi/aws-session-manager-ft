@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from src.utils import check_hosts_entry, update_hosts
+from src.utils.utils import check_hosts_entry, update_hosts
 
 hosts_bp = Blueprint("hosts", __name__, url_prefix="/api/hosts")
 

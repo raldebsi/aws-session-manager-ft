@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from src.utils.kube import (
+    k8s_health_check,
     setup_kubeconfig,
     update_kube_cluster_config,
     get_k8s_current_context,
@@ -28,7 +29,19 @@ def list_nodes():
         return jsonify({"nodes": nodes})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
+    
+@kube_bp.route("/health", methods=["GET"])
+def health_check():
+    """Perform a Kubernetes health check."""
+    try:
+        context = request.args.get("context") or None
+        healthy = k8s_health_check(context=context)
+        if healthy:
+            return jsonify({"status": "ok"})
+        else:
+            return jsonify({"status": "unhealthy", "message": "Kubernetes health check failed"}), 503
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @kube_bp.route("/setup", methods=["POST"])
 def setup_kube():
