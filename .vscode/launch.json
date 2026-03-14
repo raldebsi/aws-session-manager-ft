@@ -9,6 +9,15 @@
             "justMyCode": true,
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Python: Run api.app module",
+            "type": "python",
+            "request": "launch",
+            "module": "api.app",
+            "justMyCode": true,
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

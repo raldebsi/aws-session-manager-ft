@@ -4,13 +4,13 @@ import time
 from src.utils.utils import ensure_elevated_privileges
 from src.utils.data_loaders import load_user_config, load_connections
 from src.models.config import SSMUserConfig, SSMConnectionConfig
-from src.utils.kube import start_eks_tunnel, get_k8s_nodes
+from src.utils.kube import k8s_health_check, start_eks_tunnel
 from src.common import tunnel_manager, logger, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
 
 tunnel_manager.register_shutdown_handler()
 
 def main():
-    ensure_elevated_privileges()
+    # ensure_elevated_privileges() # No longer using hosts -> not need
     try:
         user_config: SSMUserConfig = load_user_config(USER_CONFIG_PATH)
         connections: SSMConnectionConfig = load_connections(CONNECTIONS_CONFIG_PATH)
@@ -86,11 +86,11 @@ def main():
         print("Tunnel started successfully. Verifying Kubernetes connection...")
         if tunnel_id:
             try:
-                nodes = get_k8s_nodes()
-                if nodes:
-                    print(f"Kubernetes connection verified. Nodes: {', '.join(nodes)}")
-                else:
-                    print("Kubernetes connection failed: No nodes found.")
+                healthcheck = k8s_health_check()
+                if not healthcheck:
+                    print("Kubernetes health check failed.")
+                    continue
+                print("Kubernetes Connection Verified.")
             except Exception as e:
                 print(f"Error verifying Kubernetes connection: {e}")
         else:

@@ -4,7 +4,7 @@ import yaml
 
 from typing import Optional
 
-from src.utils import logger, run_cmd, update_hosts
+from src.utils.utils import logger, run_cmd, update_hosts
 from src.common import tunnel_manager
 
 cmd_logger = logging.getLogger("cmd_logger")
@@ -44,7 +44,17 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
         is_aws_default_name = cluster_name and cluster_name.startswith("arn:aws:eks:") and ":cluster/" in cluster_name
         has_same_port = int(cluster_port) == int(local_port) if cluster_port else False
         has_same_name = cluster_name == cluster_alias if cluster_alias else False
-        has_same_server = cluster_host.lower() == local_server.lower()
+        tls_server_name = cluster["cluster"].get("tls-server-name")
+        if tls_server_name:
+            has_same_server = tls_server_name.lower() == local_server.lower()
+            has_same_server = has_same_server and cluster_host in [
+                "localhost", "127.0.0.1", "0.0.0.0"
+            ]
+            # In order for it to be eligible it needs to be a tsl server with the same name connected to localhost,
+            # Otherwise it is probably a proxy server that should not be overwritten unless the `name` is the same.
+        else:
+            has_same_server = cluster_host.lower() == local_server.lower()
+
 
         new_server_name = f"{local_server}:{local_port}"
         if cluster_protocol:
@@ -56,6 +66,7 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
             "protocol": cluster_protocol,
             "host": cluster_host,
             "port": cluster_port,
+            "tls_server_name": tls_server_name,
             "is_aws_default_name": is_aws_default_name,
             "has_same_port": has_same_port,
             "has_same_name": has_same_name,
@@ -103,7 +114,8 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
     cluster = config["clusters"][next_idx]
 
     new_server_name = cluster_info["new_server_name"]
-    cluster["cluster"]["server"] = new_server_name
+    cluster["cluster"]["server"] = f"https://127.0.0.1:{local_port}" # tls local mode
+    cluster["cluster"]["tls-server-name"] = local_server # SNI passthrough to ensure certs work
     if cluster_alias:
         cluster["name"] = cluster_alias
         edited = cluster_alias
@@ -160,11 +172,28 @@ def setup_kubeconfig(profile, cluster_name, region, context_alias = None):
 def get_k8s_current_context():
     """Get the current Kubernetes context using kubectl."""
     process = run_cmd(["kubectl", "config", "current-context"])
-    if not process.stdout:
+    output = process.stdout.read().strip() if process.stdout else ""
+    if not output:
+        logger.error(process.stderr.read() if process.stderr else "No output from kubectl current-context")
         return None
-    context = process.stdout.read().strip()
+    context = output
     process.wait()
     return context
+
+def k8s_health_check(context=None):
+    """Check if Kubernetes cluster is reachable by getting the nodes."""
+    cmd = ["kubectl", "get", "--raw", "/healthz"]
+    if context:
+        cmd.extend(["--context", context])
+    process = run_cmd(cmd)
+    output = process.stdout.read().strip() if process.stdout else ""
+    if not output:
+        logger.error(process.stderr.read() if process.stderr else "No output from kubectl health check")
+        return False
+    
+    process.wait()
+    print(f"Kubernetes health check output: {output}")
+    return output == "ok"
 
 
 def get_k8s_nodes(context=None):
@@ -176,10 +205,12 @@ def get_k8s_nodes(context=None):
 
     process = run_cmd(cmd)
 
-    if not process.stdout:
+    output = [line.strip() for line in process.stdout] if process.stdout else []
+    if not output:
+        logger.error(process.stderr.read() if process.stderr else "No output from kubectl get nodes")
         return []
 
-    nodes = [line.strip() for line in process.stdout if line.strip()]
+    nodes = output
     process.wait()
     return nodes
 
@@ -199,7 +230,8 @@ def start_eks_tunnel(
         return None
 
     # Update hosts if necessary
-    update_hosts(endpoint)
+    if not kubeconfig_path:
+        update_hosts(endpoint) # Replace hosts when no control over kubeconfig (requires admin)
 
     if kubeconfig_path: # Update the config file
         if update_kube_cluster_config(
