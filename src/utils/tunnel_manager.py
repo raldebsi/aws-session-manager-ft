@@ -1,35 +1,69 @@
+from enum import Enum
 import signal
 import threading
-from typing import Optional, TypedDict
+from typing import Literal, Optional, TypedDict, Union
+from uuid import uuid4
 from src.utils.managed_process import ManagedProcess
 import logging
 
 logger = logging.getLogger("tunnel_manager")
 
+class TunnelState(Enum):
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    APP_SHUTTING_DOWN = "app-shutting-down"
+    STOPPED_SHUTDOWN = "stopped-shutdown"
+    STOPPED_ENDED = "stopped-ended"
+    KILLED = "killed"
+    ERROR = "error"
+
 class Tunnel(TypedDict):
     thread: threading.Thread
     connection_id: str
     process: Optional[ManagedProcess]
+    state: TunnelState
 
-class TunnelManager:
+class SSMTunnelManager:
+    """
+        This class is specifically for SSM Tunnels. It contains logic with lots of assumptions about how SSM tunnels work.
+        It is not intended to be a generic tunnel manager, as it overrides lots of thread behaviors, states, and exits.
+        It also generates content tailored specifically for SSM.
+    """
     def __init__(self):
         self.tunnels: dict[str, Tunnel] = {}
         self._lock = threading.RLock()
         self._shutdown_flag = threading.Event()
 
+    def update_tunnel_state(self, tunnel_id, new_state: Union[TunnelState, str]):
+        if isinstance(new_state, str):
+            try:
+                new_state = TunnelState(new_state)
+            except ValueError:
+                logger.error(f"[{tunnel_id}] Invalid tunnel state '{new_state}' provided.")
+                return
+        with self._lock:
+            if tunnel_id in self.tunnels:
+                self.tunnels[tunnel_id]['state'] = new_state
+                logger.info(f"[{tunnel_id}] Tunnel state updated to '{new_state}'.")
+            else:
+                logger.warning(f"[{tunnel_id}] Attempted to update state for non-existent tunnel.")
+
     def start_tunnel(self, connection_id, *cmd):
-        def tunnel_thread():
+        def tunnel_thread(): # Define new function internally to utilize local variables
             try:
                 with ManagedProcess(cmd) as mp:
                     logger.info(f"[{tunnel_id}] Tunnel process started with PID {mp.pid}")
                     self.register_process(tunnel_id, mp)
 
                     def log_stream(stream_iter, stream_name):
+                        self.update_tunnel_state(tunnel_id, 'running')
                         for line in stream_iter:
                             line = line.strip()
                             logger.info(f"[{tunnel_id}][{stream_name}] {line}")
                             if self._shutdown_flag.is_set() and mp.returncode is None:
-                                logger.info(f"[{tunnel_id}] Terminating process due to shutdown flag.")
+                                self.update_tunnel_state(tunnel_id, "app-shutting-down")
+                                logger.info(f"[{tunnel_id}] Terminating process due to app shutdown flag.")
                                 mp.terminate()
 
                     stdout_thread = threading.Thread(target=log_stream, args=(mp.iter_stdout(), 'stdout'), daemon=True)
@@ -41,17 +75,20 @@ class TunnelManager:
                     stderr_thread.join()
                     logger.info(f"[{tunnel_id}] Tunnel process output threads ended.")
                     mp.wait()
+                    if mp.returncode != 0:
+                        self.update_tunnel_state(tunnel_id, 'error')
                     logger.info(f"[{tunnel_id}] Tunnel finished with code {mp.returncode}")
             except Exception as e:
                 logger.error(f"[{tunnel_id}] Tunnel error: {e}")
             finally:
                 with self._lock:
-                    self.tunnels.pop(tunnel_id, None)
+                    self.update_tunnel_state(tunnel_id, 'stopped-shutdown' if self._shutdown_flag.is_set() else 'stopped-ended')
 
         thread = threading.Thread(target=tunnel_thread, daemon=True)
-        tunnel_id = f"{connection_id}-{thread.ident}" # Prevent ID collision even though it must not happen, since only one tunnel per connection_id is allowed, but if somehow the code allows for it, we need to allow killing the correct tunnel
+        tunnel_suffix = thread.ident if thread.ident else uuid4().hex[:8] # Flask disables ident in threads
+        tunnel_id = f"{connection_id}-{tunnel_suffix}" # Prevent ID collision even though it must not happen, since only one tunnel per connection_id is allowed, but if somehow the code allows for it, we need to allow killing the correct tunnel
         with self._lock:
-            self.tunnels[tunnel_id] = {'thread': thread, 'connection_id': connection_id, 'process': None}
+            self.tunnels[tunnel_id] = {'thread': thread, 'connection_id': connection_id, 'process': None, 'state': TunnelState.STARTING}
         thread.start()
         return tunnel_id
 
@@ -73,6 +110,24 @@ class TunnelManager:
                 logger.info(f"[{tunnel_id}] Termination signal sent.")
             else:
                 logger.warning(f"[{tunnel_id}] No process found to terminate.")
+            
+            self.update_tunnel_state(tunnel_id, 'stopping')
+
+    def kill_tunnel(self, tunnel_id):
+        with self._lock:
+            tunnel = self.tunnels.get(tunnel_id)
+            if not tunnel:
+                logger.warning(f"[{tunnel_id}] Attempted to kill non-existent tunnel.")
+                return
+            process = tunnel['process'] if tunnel else None
+            if process:
+                logger.info(f"[{tunnel_id}] Killing process...")
+                process.kill()
+                logger.info(f"[{tunnel_id}] Kill signal sent.")
+            else:
+                logger.warning(f"[{tunnel_id}] No process found to kill.")
+            
+            self.update_tunnel_state(tunnel_id, 'killed')
 
     def register_process(self, tunnel_id, process):
         with self._lock:
@@ -85,6 +140,20 @@ class TunnelManager:
     def list_tunnels(self):
         with self._lock:
             return list(self.tunnels.keys())
+        
+    def get_tunnel_info(self, tunnel_id):
+        with self._lock:
+            tunnel = self.tunnels.get(tunnel_id)
+            if not tunnel:
+                logger.warning(f"[{tunnel_id}] Attempted to get info for non-existent tunnel.")
+                return {}
+            return {
+                "connection_id": tunnel['connection_id'],
+                "process_id": tunnel['process'].pid if tunnel['process'] else None,
+                "thread_id": tunnel['thread'].ident if tunnel['thread'] else None,
+                "thread_alive": tunnel['thread'].is_alive() if tunnel['thread'] else None,
+                "state": tunnel['state'].value if tunnel['state'] else None,
+            }
 
     def shutdown_all_tunnels(self, sig=None, frame=None):
         if sig:
@@ -108,6 +177,9 @@ class TunnelManager:
         atexit.register(self.shutdown_all_tunnels)
         signal.signal(signal.SIGINT, self.shutdown_all_tunnels)
         signal.signal(signal.SIGTERM, self.shutdown_all_tunnels)
+
+    def get_shutdown_handler(self):
+        return self.shutdown_all_tunnels
 
     def handle_dangling_tunnels(self):
         """Attempt to join all tunnel threads and log any that are still alive or missing a process."""

@@ -32,7 +32,7 @@ class ManagedProcess:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.process and self.process.poll() is None:
             self.terminate()
-        # Optionally, suppress KeyboardInterrupt if desired
+        # As fallback, call kill
         return False
 
     def terminate(self):
@@ -92,7 +92,7 @@ class ManagedProcess:
         output_limit = output_limit or self.output_limit
         return self.iter_out('stderr', output_logger, output_limit)
 
-    def kill(self):
+    def kill(self): # Kills process and children
         logger.info(f"Kill Requested for PID {self.pid}")
         if self.process:
             logger.info("Kill by process group...")

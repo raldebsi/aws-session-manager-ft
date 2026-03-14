@@ -1,7 +1,9 @@
+import time
+
 from flask import Blueprint, jsonify, request
 
 from src.common import tunnel_manager
-from src.utils.kube import start_eks_tunnel
+from src.utils.kube import k8s_health_check, start_eks_tunnel
 
 tunnels_bp = Blueprint("tunnels", __name__, url_prefix="/api/tunnels")
 
@@ -53,6 +55,13 @@ def start_tunnel():
         return jsonify({"tunnel_id": tunnel_id, "status": "started"})
     return jsonify({"error": "Failed to start tunnel"}), 500
 
+@tunnels_bp.route("/<path:tunnel_id>", methods=["GET"])
+def get_tunnel_info(tunnel_id):
+    """Get information about a specific tunnel."""
+    tunnel_info = tunnel_manager.get_tunnel_info(tunnel_id)
+    if not tunnel_info:
+        return jsonify({"error": f"Tunnel '{tunnel_id}' not found"}), 404
+    return jsonify(tunnel_info)
 
 @tunnels_bp.route("/<path:tunnel_id>/stop", methods=["POST"])
 def stop_tunnel(tunnel_id):
@@ -60,8 +69,33 @@ def stop_tunnel(tunnel_id):
     if tunnel_id not in tunnel_manager.list_tunnels():
         return jsonify({"error": f"Tunnel '{tunnel_id}' not found"}), 404
 
-    tunnel_manager.stop_tunnel(tunnel_id)
-    return jsonify({"tunnel_id": tunnel_id, "status": "stop_requested"})
+    stage = "stop_requested"
+    try:
+        tunnel_manager.stop_tunnel(tunnel_id)
+        stage = "stop_request_sent"
+    except Exception as e:
+        return jsonify(tunnel_id=tunnel_id, status=stage, error=str(e)), 500
+    stage = "kill_requested"
+    try:
+        tunnel_manager.kill_tunnel(tunnel_id)
+        stage = "kill_request_sent"
+    except Exception as e:
+        return jsonify(tunnel_id=tunnel_id, status=stage, error=str(e)), 500
+    
+    tunnel_info = tunnel_manager.get_tunnel_info(tunnel_id)
+    connection_id = tunnel_info.get("connection_id")
+    tunnel_state = tunnel_info.get("state")
+    for _ in range(3):
+        if tunnel_state not in ["stopped-shutdown", "stopped-ended", "killed", "error"]:
+            time.sleep(1) # Give it a moment to update state after stop/kill
+            tunnel_info = tunnel_manager.get_tunnel_info(tunnel_id)
+            tunnel_state = tunnel_info.get("state")
+        else:
+            break
+    
+    status = k8s_health_check(connection_id)
+    
+    return jsonify({"tunnel_id": tunnel_id, "stopped": not status, "tunnel_state": tunnel_state})
 
 
 @tunnels_bp.route("/<path:tunnel_id>/output", methods=["GET"])

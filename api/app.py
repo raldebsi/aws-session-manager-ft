@@ -1,15 +1,30 @@
 import os
 import sys
+import atexit
 
 # Ensure project root is on the path so src.* imports work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api import create_app
-from src.common import tunnel_manager
+from src.common import DEBUG_MODE, tunnel_manager
 
-tunnel_manager.register_shutdown_handler()
+shutdown_handler = tunnel_manager.get_shutdown_handler()
+atexit.register(shutdown_handler) # Reregister the handler to avoid using the handler's signal calls in werkzeug
 
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app_config = {
+        "host": "0.0.0.0",
+        "port": 8000,
+        "debug": DEBUG_MODE,
+        "use_reloader": False,
+    }
+    if DEBUG_MODE:
+        app_config.update({
+            "debug": True,
+            "host": "0.0.0.0",
+        })
+    
+    app.run(host=app_config["host"], port=app_config["port"], debug=app_config["debug"], use_reloader=app_config["use_reloader"])
+    

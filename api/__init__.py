@@ -7,7 +7,6 @@ from api.routes.kube import kube_bp
 from api.routes.tunnels import tunnels_bp
 from api.routes.pipelines import pipelines_bp
 
-
 def create_app():
     app = Flask(__name__)
 

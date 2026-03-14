@@ -2,9 +2,9 @@ import os
 import logging
 import sys
 
-from src.utils.tunnel_manager import TunnelManager
+from src.utils.tunnel_manager import SSMTunnelManager
 
-tunnel_manager = TunnelManager()
+tunnel_manager = SSMTunnelManager()
 
 CONFIG_PATH = "config"
 USER_CONFIG_FILE = "user.json"
