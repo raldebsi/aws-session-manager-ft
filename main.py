@@ -70,6 +70,14 @@ def main():
             kubeconfig_path=mapped.kubeconfig_path,
         )
 
+        if tunnel_id is None:
+            print("Failed to start tunnel. Check logs for details.")
+            continue
+
+        if tunnel_id == "":
+            print("Tunnel for this connection is already running.")
+            continue
+
         timeout = 15
         time_now = time.time()
         found = False

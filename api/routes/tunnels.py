@@ -51,9 +51,13 @@ def start_tunnel():
         kubeconfig_path=data.get("kubeconfig_path"),
     )
 
-    if tunnel_id:
-        return jsonify({"tunnel_id": tunnel_id, "status": "started"})
-    return jsonify({"error": "Failed to start tunnel"}), 500
+    if tunnel_id is None:
+        return jsonify({"error": "Failed to start tunnel"}), 500
+
+    if tunnel_id == "":
+        return jsonify({"warning": "Tunnel for this connection is already running"}), 200
+    
+    return jsonify({"tunnel_id": tunnel_id, "status": "started"})
 
 @tunnels_bp.route("/<path:tunnel_id>", methods=["GET"])
 def get_tunnel_info(tunnel_id):

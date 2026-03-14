@@ -59,9 +59,13 @@ def full_connect():
         kubeconfig_path=mapped.kubeconfig_path,
     )
 
-    if not tunnel_id:
+    if tunnel_id is None:
         steps.append({"step": "start_tunnel", "status": "failed"})
         return jsonify({"error": "Failed to start tunnel", "steps": steps}), 500
+
+    if tunnel_id == "":
+        steps.append({"step": "start_tunnel", "status": "exists"})
+        return jsonify({"warning": "Tunnel for this connection is already running", "steps": steps}), 200
 
     steps.append({"step": "start_tunnel", "status": "ok", "tunnel_id": tunnel_id})
 

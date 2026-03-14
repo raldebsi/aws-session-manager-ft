@@ -84,6 +84,11 @@ class SSMTunnelManager:
                 with self._lock:
                     self.update_tunnel_state(tunnel_id, 'stopped-shutdown' if self._shutdown_flag.is_set() else 'stopped-ended')
 
+        if self.has_tunnel_for_connection(connection_id):
+            logger.warning(f"Tunnel already exists for connection_id {connection_id}. Cannot start another.")
+            # TODO: Consider, return None or return existing connection?
+            return ""
+
         thread = threading.Thread(target=tunnel_thread, daemon=True)
         tunnel_suffix = thread.ident if thread.ident else uuid4().hex[:8] # Flask disables ident in threads
         tunnel_id = f"{connection_id}-{tunnel_suffix}" # Prevent ID collision even though it must not happen, since only one tunnel per connection_id is allowed, but if somehow the code allows for it, we need to allow killing the correct tunnel
@@ -95,7 +100,10 @@ class SSMTunnelManager:
     def has_tunnel_for_connection(self, connection_id):
         """Return True if a tunnel exists for the given connection_id."""
         with self._lock:
-            return any(t.get('connection_id') == connection_id for t in self.tunnels.values())
+            return any(
+                t.get('connection_id') == connection_id and t.get('state') in [TunnelState.STARTING, TunnelState.RUNNING]
+                for t in self.tunnels.values()
+            )
 
     def stop_tunnel(self, tunnel_id):
         with self._lock:

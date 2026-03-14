@@ -225,6 +225,10 @@ def start_eks_tunnel(
     ):
     logger.info(f"Starting EKS Tunnel for {cluster_name}")
 
+    if tunnel_manager.has_tunnel_for_connection(tunnel_connection_id):
+        logger.warning(f"Tunnel already exists for connection_id {tunnel_connection_id}. Cannot start another.")
+        return ""
+
     if not setup_kubeconfig(profile, cluster_name, region, context_alias=tunnel_connection_id):
         logger.error(f"Failed to update kubeconfig for {cluster_name}. Aborting tunnel setup.")
         return None
@@ -269,6 +273,10 @@ def start_ssm_tunnel(
         document_name: str = "AWS-StartPortForwardingSessionToRemoteHost",
         local_port: int = 443, remote_port: int = 443,
 ):
+    if tunnel_manager.has_tunnel_for_connection(tunnel_connection_id):
+        logger.warning(f"Tunnel already exists for connection_id {tunnel_connection_id}. Cannot start another.")
+        return ""
+    
     cmd = [
         "aws",
         "ssm",
