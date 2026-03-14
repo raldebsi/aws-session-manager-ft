@@ -1,15 +1,11 @@
 import os
 import sys
 import time
-from src.utils import ensure_elevated_privileges
+from src.utils.utils import ensure_elevated_privileges
 from src.utils.data_loaders import load_user_config, load_connections
 from src.models.config import SSMUserConfig, SSMConnectionConfig
 from src.utils.kube import start_eks_tunnel, get_k8s_nodes
-from src.common import tunnel_manager, logger
-
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
-USER_CONFIG_PATH = os.path.join(CONFIG_DIR, "user.json")
-CONNECTIONS_CONFIG_PATH = os.path.join(CONFIG_DIR, "connections")
+from src.common import tunnel_manager, logger, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
 
 tunnel_manager.register_shutdown_handler()
 

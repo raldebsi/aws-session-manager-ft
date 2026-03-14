@@ -8,6 +8,8 @@ from typing import Optional
 
 from src.common import DEBUG_MODE, logger
 
+def resolve_absolute_path(path: str) -> str:
+    return os.path.abspath(os.path.expanduser(path))
 
 def load_json(json_path: str) -> dict:
     try:
