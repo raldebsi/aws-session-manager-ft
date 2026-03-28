@@ -1,0 +1,63 @@
+<div class="form-container">
+    <div class="form-title">
+        <i class="fa-solid fa-server"></i>
+        <span id="formTitleText">Create Connection</span>
+        <span class="edit-badge" id="editBadge" style="display:none">
+            <i class="fa-solid fa-pen-to-square"></i> EDITING
+        </span>
+        <button class="conn-btn secondary clipboard-btn" id="pasteClipboardBtn" title="Pre-fill from clipboard">
+            <i class="fa-solid fa-clipboard"></i> Paste
+        </button>
+    </div>
+    <div id="formMessage"></div>
+    <div class="form-grid">
+        <div class="form-group">
+            <label class="form-label">ID <span class="required">*</span></label>
+            <input class="form-input" id="connId" placeholder="e.g. my-cluster-prod" />
+            <span class="form-hint">Unique identifier, used as filename</span>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Type <span class="required">*</span></label>
+            <select class="form-select" id="connType"></select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Name <span class="required">*</span></label>
+            <input class="form-input" id="connName" placeholder="e.g. Production Mumbai" />
+        </div>
+        <div class="form-group">
+            <label class="form-label">Cluster <span class="required">*</span></label>
+            <input class="form-input" id="connCluster" placeholder="e.g. MY-CLUSTER" />
+        </div>
+        <div class="form-group">
+            <label class="form-label">Region <span class="required">*</span></label>
+            <input class="form-input" id="connRegion" placeholder="e.g. ap-south-1" />
+        </div>
+        <div class="form-group">
+            <label class="form-label">Remote Port</label>
+            <input class="form-input" id="connRemotePort" type="number" />
+        </div>
+        <div class="form-group full-width">
+            <label class="form-label">Endpoint <span class="required">*</span></label>
+            <input class="form-input" id="connEndpoint" placeholder="e.g. ABCD1234.gr7.ap-south-1.eks.amazonaws.com" />
+        </div>
+        <div class="form-group full-width">
+            <label class="form-label">SSM Document</label>
+            <input class="form-input" id="connDocument" />
+        </div>
+        <div class="form-group full-width">
+            <label class="form-label">Bastions</label>
+            <div class="bastion-entries" id="bastionEntries">
+                <div class="bastion-row">
+                    <input class="form-input" placeholder="Name (e.g. main)" data-bastion="key" />
+                    <input class="form-input" placeholder="Instance ID (e.g. i-0abc...)" data-bastion="value" />
+                    <button class="bastion-remove-btn" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </div>
+            <button class="bastion-add-btn" id="addBastionBtn"><i class="fa-solid fa-plus"></i> Add bastion</button>
+        </div>
+    </div>
+    <div class="form-actions">
+        <button class="conn-btn secondary" id="cancelConnBtn">Cancel</button>
+        <button class="conn-btn primary" id="saveConnBtn"><i class="fa-solid fa-check" id="saveConnIcon"></i> <span id="saveConnLabel">Create</span></button>
+    </div>
+</div>

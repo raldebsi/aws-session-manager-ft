@@ -1,0 +1,20 @@
+<div class="dashboard-pane">
+    <div class="dashboard-toolbar">
+        <div class="dashboard-search">
+            <i class="fa-solid fa-magnifying-glass dashboard-search-icon"></i>
+            <input class="form-input dashboard-search-input" id="dashboardSearch" type="text" placeholder="Search sessions..." />
+        </div>
+        <div class="dashboard-view-toggle">
+            <button class="view-btn active" id="viewGrouped" title="Grouped by connection" data-view="grouped">
+                <i class="fa-solid fa-layer-group"></i>
+            </button>
+            <button class="view-btn" id="viewRegion" title="Grouped by region" data-view="region">
+                <i class="fa-solid fa-globe"></i>
+            </button>
+            <button class="view-btn" id="viewAll" title="All sessions" data-view="all">
+                <i class="fa-solid fa-grip"></i>
+            </button>
+        </div>
+    </div>
+    <div id="dashboardContent"></div>
+</div>

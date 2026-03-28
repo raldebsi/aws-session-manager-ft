@@ -1,0 +1,45 @@
+<div class="form-container">
+    <div class="form-title">
+        <i class="fa-solid fa-file-import"></i>
+        <span>Import Connection</span>
+    </div>
+    <div id="formMessage"></div>
+
+    <div class="import-tabs">
+        <button class="import-tab active" id="tabEncoded">
+            <i class="fa-solid fa-lock"></i> Paste Encoded String
+        </button>
+        <button class="import-tab" id="tabFile">
+            <i class="fa-solid fa-file-code"></i> Browse JSON File
+        </button>
+    </div>
+
+    <div id="importEncodedSection" class="import-section">
+        <div class="form-group full-width">
+            <label class="form-label">Encoded String</label>
+            <textarea class="form-input import-textarea" id="importEncoded" placeholder="Paste the shared encoded string here..."></textarea>
+        </div>
+    </div>
+
+    <div id="importFileSection" class="import-section" style="display:none">
+        <div class="form-group full-width">
+            <label class="form-label">JSON File</label>
+            <div class="file-input-wrapper">
+                <label class="conn-btn secondary file-input-label" for="importFile">
+                    <i class="fa-solid fa-folder-open"></i> Choose File
+                </label>
+                <input type="file" id="importFile" accept=".json" style="display:none" />
+                <span class="file-input-name" id="importFileName">No file selected</span>
+            </div>
+        </div>
+        <div id="importFilePreview" class="import-preview" style="display:none">
+            <div class="form-label">Detected Kind</div>
+            <span class="conn-card-badge" id="importDetectedKind"></span>
+        </div>
+    </div>
+
+    <div class="form-actions">
+        <button class="conn-btn secondary" id="cancelImportBtn">Cancel</button>
+        <button class="conn-btn primary" id="submitImportBtn"><i class="fa-solid fa-file-import"></i> Import</button>
+    </div>
+</div>

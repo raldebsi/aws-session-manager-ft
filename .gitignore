@@ -6,5 +6,6 @@ __pycache__/
 
 config
 *.txt
+*.bkp
 
 .claude

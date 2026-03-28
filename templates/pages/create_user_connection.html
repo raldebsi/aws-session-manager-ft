@@ -1,0 +1,49 @@
+<div class="form-container">
+    <div class="form-title">
+        <i class="fa-solid fa-plug"></i>
+        <span id="formTitleText">Create User Connection</span>
+        <span class="edit-badge" id="editBadge" style="display:none">
+            <i class="fa-solid fa-pen-to-square"></i> EDITING
+        </span>
+        <button class="conn-btn secondary clipboard-btn" id="pasteClipboardBtn" title="Pre-fill from clipboard">
+            <i class="fa-solid fa-clipboard"></i> Paste
+        </button>
+    </div>
+    <div id="formMessage"></div>
+    <div class="form-grid">
+        <div class="form-group">
+            <label class="form-label">Connection <span class="required">*</span></label>
+            <select class="form-select" id="ucConnection"></select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Bastion <span class="required">*</span></label>
+            <select class="form-select" id="ucBastion"></select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Connection Name <span class="required">*</span></label>
+            <input class="form-input" id="ucName" placeholder="e.g. My Dev Tunnel" />
+        </div>
+        <div class="form-group">
+            <label class="form-label">Description</label>
+            <input class="form-input" id="ucDescription" placeholder="e.g. Dev UAT Mumbai" />
+        </div>
+        <div class="form-group">
+            <label class="form-label">Local Port <span class="required">*</span></label>
+            <input class="form-input" id="ucLocalPort" type="number" placeholder="e.g. 9443" />
+            <div id="portWarning"></div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">AWS Profile</label>
+            <input class="form-input" id="ucProfile" />
+        </div>
+        <div class="form-group full-width">
+            <label class="form-label">Kubeconfig Path</label>
+            <input class="form-input" id="ucKubeconfig" />
+            <span class="form-hint">Leave empty to use global default</span>
+        </div>
+    </div>
+    <div class="form-actions">
+        <button class="conn-btn secondary" id="cancelUcBtn">Cancel</button>
+        <button class="conn-btn primary" id="saveUcBtn"><i class="fa-solid fa-check" id="saveUcIcon"></i> <span id="saveUcLabel">Create</span></button>
+    </div>
+</div>

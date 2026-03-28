@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=960, height=640, initial-scale=1.0">
+    <title>SSM Manager</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,500,700&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar expanded">
+            <div class="sidebar-header">
+                <div class="ssm-title">
+                    <span class="ssm-icon-bg">
+                        <i class="fa-solid fa-shield-halved ssm-icon"></i>
+                    </span>
+                    <span>SSM Manager</span>
+                </div>
+                <button class="hamburger" id="hamburgerBtn" aria-label="Toggle sidebar">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-pane" id="dashboardPane">
+                    <span class="sidebar-icon"><i class="fa-solid fa-house"></i></span>
+                    Dashboard
+                </div>
+                <div class="sidebar-pane" id="configPane">
+                    <span class="sidebar-icon"><i class="fa-solid fa-network-wired"></i></span>
+                    Connections
+                </div>
+                <div class="sidebar-pane" id="settingsPane">
+                    <span class="sidebar-icon"><i class="fa-solid fa-gear"></i></span>
+                    Settings
+                </div>
+            </div>
+            <div class="sidebar-section sessions-section">
+                <div class="sessions-group">
+                    <div class="sessions-group-title">
+                        <i class="fa-solid fa-tower-broadcast sessions-group-icon active"></i>
+                        Active Sessions
+                        <span class="sessions-count" id="activeCount">0</span>
+                    </div>
+                    <div class="sidebar-session-list" id="activeSessions">
+                        <!-- Active sessions will be moved here by JS -->
+                    </div>
+                </div>
+                <div class="sessions-group">
+                    <div class="sessions-group-title">
+                        <i class="fa-solid fa-plug sessions-group-icon available"></i>
+                        Available
+                    </div>
+                    <div class="sidebar-session-list" id="availableSessions">
+                        <!-- Available sessions populated by JS -->
+                    </div>
+                </div>
+                <div class="sidebar-new-connection" id="newConnectionBtn">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>New Connection</span>
+                </div>
+            </div>
+        </aside>
+        <main class="main-content">
+            <div class="main-topbar">
+                <span class="main-topbar-title" id="mainTopbarTitle">Dashboard</span>
+            </div>
+            <div class="main-content-body" id="mainContentBody">
+                <!-- Pane content rendered by JS -->
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Session data
+        const sessions = [
+            { id: 1, name: 'Test 9444', type: 'EKS', description: 'Dev UAT Mumbai', localPort: 9444, region: 'ap-south-1', remotePort: 443, status: 'active', connectionId: 'ai-devuat-mumbai' },
+            { id: 2, name: 'Test 9443', type: 'EKS', description: 'Dev UAT Mumbai', localPort: 9443, region: 'ap-south-1', remotePort: 443, status: 'error', connectionId: 'ai-devuat-mumbai' },
+            { id: 3, name: 'Session Gamma', type: 'RDS', description: 'Dev UAT Mumbai', localPort: 3000, region: 'ap-south-1', remotePort: 443, status: 'inactive', connectionId: 'ai-rds-prod' },
+        ];
+    </script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
