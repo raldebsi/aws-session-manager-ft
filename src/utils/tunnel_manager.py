@@ -119,7 +119,8 @@ class SSMTunnelManager:
                     stderr_thread.join()
                     logger.info(f"[{tunnel_id}] Tunnel process output threads ended.")
                     mp.wait()
-                    if mp.returncode != 0:
+                    current = self.tunnels.get(tunnel_id, {}).get('state')
+                    if mp.returncode != 0 and current not in (TunnelState.STOPPING, TunnelState.KILLED):
                         self.update_tunnel_state(tunnel_id, 'error')
                     logger.info(f"[{tunnel_id}] Tunnel finished with code {mp.returncode}")
             except Exception as e:
@@ -127,8 +128,12 @@ class SSMTunnelManager:
             finally:
                 with self._lock:
                     current_state = self.tunnels.get(tunnel_id, {}).get('state')
-                    if current_state != TunnelState.KILLED:
-                        self.update_tunnel_state(tunnel_id, 'stopped-shutdown' if self._shutdown_flag.is_set() else 'stopped-ended')
+                    if current_state in (TunnelState.KILLED, TunnelState.ERROR):
+                        pass  # preserve killed/error state
+                    elif self._shutdown_flag.is_set():
+                        self.update_tunnel_state(tunnel_id, 'stopped-shutdown')
+                    else:
+                        self.update_tunnel_state(tunnel_id, 'stopped-ended')
 
         with self._lock:
             existing = self.tunnels.get(tunnel_id)

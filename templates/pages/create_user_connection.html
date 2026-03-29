@@ -34,7 +34,13 @@
         </div>
         <div class="form-group">
             <label class="form-label">AWS Profile</label>
-            <input class="form-input" id="ucProfile" />
+            <div class="profile-combo">
+                <select class="form-select" id="ucProfileSelect">
+                    <option value="">Loading...</option>
+                </select>
+                <input class="form-input" id="ucProfileCustom" placeholder="Or type custom profile..." style="display:none" />
+            </div>
+            <input type="hidden" id="ucProfile" />
         </div>
         <div class="form-group full-width">
             <label class="form-label">Kubeconfig Path</label>

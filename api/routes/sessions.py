@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify, request
 from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
 from src.utils.data_loaders import load_user_config, load_connections
 from src.utils.kube import k8s_health_check, get_k8s_nodes
-from src.utils.utils import get_pid_on_port
+from src.utils.utils import get_pid_on_port, tcp_health_check
 
 sessions_bp = Blueprint("sessions", __name__, url_prefix="/api/sessions")
 
@@ -120,14 +120,22 @@ def get_stats():
 
 @sessions_bp.route("/<connection_key>/health", methods=["GET"])
 def check_health(connection_key):
-    """Check health of a session's port, k8s, and/or tunnel.
-    Query param ?check=port|k8s|tunnel to check a single indicator, omit for all."""
+    """Check health of a session's port, service, and/or tunnel.
+    Query params: ?check=port|service|tunnel, ?type=eks|rds (override), ?timeout=seconds."""
     check = request.args.get("check")
+    type_override = request.args.get("type")
+    timeout = int(request.args.get("timeout", 10))
 
     user_config = load_user_config(USER_CONFIG_PATH)
     uc = user_config.connections.get(connection_key)
     if not uc:
         return jsonify({"error": "Session not found"}), 404
+
+    connections = load_connections(CONNECTIONS_CONFIG_PATH)
+    conn = connections.get(uc.connection_id) if uc else None
+    if not conn and not type_override:
+        return jsonify({"error": f"Connection '{uc.connection_id}' not found"}), 404
+    tunnel_type = type_override.lower() if type_override else (conn.type.lower() if conn else "eks")
 
     tunnel_info = tunnel_manager.get_tunnel_info(connection_key)
     our_pid = tunnel_info.get("process_id") if tunnel_info else None
@@ -148,33 +156,40 @@ def check_health(connection_key):
         else:
             result["port"] = {"status": "orange", "detail": f"External process (PID {pid})"}
 
-    # --- K8s health ---
-    if not check or check == "k8s":
-        connections = load_connections(CONNECTIONS_CONFIG_PATH)
-        try:
-            mapped = uc.map_to_connection(connections)
-        except KeyError:
-            mapped = None
-        kubeconfig_path = mapped.kubeconfig_path if mapped else None
-        context = connection_key  # connection key is used as kubeconfig context alias
-
-        try:
-            healthy, health_output = k8s_health_check(context=context, kubeconfig_path=kubeconfig_path)
-        except Exception:
-            healthy = False
-            health_output = ""
-
-        if healthy:
-            result["k8s"] = {"status": "green", "detail": "Health check passed"}
-        else:
+    # --- Service health (type-aware) ---
+    if not check or check == "service":
+        if tunnel_type == "eks":
             try:
-                nodes = get_k8s_nodes(context=context, kubeconfig_path=kubeconfig_path)
-                if nodes:
-                    result["k8s"] = {"status": "orange", "detail": f"Healthz failed but {len(nodes)} node(s) reachable", "output": health_output}
-                else:
-                    result["k8s"] = {"status": "red", "detail": "Unreachable"}
+                mapped = uc.map_to_connection(connections)
+            except KeyError:
+                mapped = None
+            kubeconfig_path = mapped.kubeconfig_path if mapped else None
+            context = connection_key
+
+            try:
+                healthy, health_output = k8s_health_check(context=context, kubeconfig_path=kubeconfig_path, timeout=timeout)
             except Exception:
-                result["k8s"] = {"status": "red", "detail": "Unreachable"}
+                healthy = False
+                health_output = ""
+
+            if healthy:
+                result["service"] = {"status": "green", "detail": "K8s health check passed"}
+            else:
+                try:
+                    nodes, nodes_output = get_k8s_nodes(context=context, kubeconfig_path=kubeconfig_path, timeout=timeout)
+                    if nodes:
+                        result["service"] = {"status": "orange", "detail": f"Healthz failed but {len(nodes)} node(s) reachable", "output": health_output}
+                    else:
+                        result["service"] = {"status": "red", "detail": f"K8s unreachable with nodes output: {nodes_output}", "output": health_output}
+                except Exception:
+                    result["service"] = {"status": "red", "detail": "K8s health check failed and nodes check also failed", "output": health_output}
+        else:
+            # RDS / generic: TCP connectivity check through the tunnel
+            healthy, detail = tcp_health_check(port=uc.local_port, timeout=timeout)
+            if healthy:
+                result["service"] = {"status": "green", "detail": detail}
+            else:
+                result["service"] = {"status": "red", "detail": detail}
 
     # --- Tunnel health ---
     if not check or check == "tunnel":

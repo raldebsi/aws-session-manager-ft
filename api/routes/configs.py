@@ -108,7 +108,9 @@ def create_connection():
     if not data:
         return jsonify({"error": "Request body is required"}), 400
 
-    required = ["id", "type", "name", "cluster", "region", "endpoint"]
+    required = ["id", "type", "name", "region", "endpoint"]
+    if data.get("type", "").lower() == "eks":
+        required.append("cluster")
     missing = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
@@ -123,11 +125,11 @@ def create_connection():
         id=data["id"],
         type=data["type"],
         name=data["name"],
-        cluster=data["cluster"],
+        cluster=data.get("cluster"),
         region=data["region"],
         endpoint=data["endpoint"],
         document=data.get("document", "AWS-StartPortForwardingSessionToRemoteHost"),
-        remote_port=int(data.get("remote_port", 443)),
+        remote_port=int(data.get("remote_port", 0)),
         bastions=data.get("bastions", {})
     )
 
@@ -206,7 +208,9 @@ def update_connection(connection_key):
     if not os.path.exists(file_path):
         return jsonify({"error": f"Connection '{connection_key}' not found"}), 404
 
-    required = ["type", "name", "cluster", "region", "endpoint"]
+    required = ["type", "name", "region", "endpoint"]
+    if data.get("type", "").lower() == "eks":
+        required.append("cluster")
     missing = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
@@ -215,11 +219,11 @@ def update_connection(connection_key):
         id=connection_key,
         type=data["type"],
         name=data["name"],
-        cluster=data["cluster"],
+        cluster=data.get("cluster"),
         region=data["region"],
         endpoint=data["endpoint"],
         document=data.get("document", "AWS-StartPortForwardingSessionToRemoteHost"),
-        remote_port=int(data.get("remote_port", 443)),
+        remote_port=int(data.get("remote_port", 0)),
         bastions=data.get("bastions", {})
     )
 
@@ -411,7 +415,9 @@ def import_config():
 
     # Forward to the appropriate create logic
     if kind == "connection":
-        required = ["id", "type", "name", "cluster", "region", "endpoint"]
+        required = ["id", "type", "name", "region", "endpoint"]
+        if config_data.get("type", "").lower() == "eks":
+            required.append("cluster")
         missing = [f for f in required if not config_data.get(f)]
         if missing:
             return jsonify({"error": f"Missing required fields for connection: {', '.join(missing)}"}), 400
@@ -425,11 +431,11 @@ def import_config():
             id=config_data["id"],
             type=config_data["type"],
             name=config_data["name"],
-            cluster=config_data["cluster"],
+            cluster=config_data.get("cluster"),
             region=config_data["region"],
             endpoint=config_data["endpoint"],
             document=config_data.get("document", "AWS-StartPortForwardingSessionToRemoteHost"),
-            remote_port=int(config_data.get("remote_port", 443)),
+            remote_port=int(config_data.get("remote_port", 0)),
             bastions=config_data.get("bastions", {})
         )
         save_json(connection.to_dict(), file_path)

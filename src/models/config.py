@@ -138,17 +138,25 @@ class SSMUserConfig:
         return cls.from_dict(json.loads(json_str))
 
 
+DEFAULT_PORTS_BY_TYPE = {"eks": 443, "rds": 5432}
+
 @dataclass
 class SSMConnection:
     id: str
-    type: str
+    type: str  # "eks" or "rds"
     name: str
-    cluster: str
     region: str
     endpoint: str
     document: str = "AWS-StartPortForwardingSessionToRemoteHost"
-    remote_port: int = 443
+    remote_port: int = 0  # 0 = auto-detect from type in __post_init__
+    cluster: Optional[str] = None  # required for EKS only
     bastions: Dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.remote_port:
+            self.remote_port = DEFAULT_PORTS_BY_TYPE.get(self.type.lower(), 443)
+        if not self.cluster:
+            self.cluster = None  # normalize empty string to None
 
     def to_dict(self) -> dict:
         return {

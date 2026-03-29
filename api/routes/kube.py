@@ -27,8 +27,8 @@ def list_nodes():
     try:
         context = request.args.get("context") or None
         kubeconfig_path = request.args.get("kubeconfig_path") or None
-        nodes = get_k8s_nodes(context=context, kubeconfig_path=kubeconfig_path)
-        return jsonify({"nodes": nodes})
+        nodes, output = get_k8s_nodes(context=context, kubeconfig_path=kubeconfig_path)
+        return jsonify({"nodes": nodes, "output": output})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -38,7 +38,8 @@ def health_check():
     try:
         context = request.args.get("context") or None
         kubeconfig_path = request.args.get("kubeconfig_path") or None
-        healthy, health_out = k8s_health_check(context=context, kubeconfig_path=kubeconfig_path)
+        timeout = int(request.args.get("timeout", 10))
+        healthy, health_out = k8s_health_check(context=context, kubeconfig_path=kubeconfig_path, timeout=timeout)
         if healthy:
             return jsonify({"status": "ok"})
         else:

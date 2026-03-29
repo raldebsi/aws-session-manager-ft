@@ -191,10 +191,73 @@ def kill_pid(pid: int) -> bool:
         return False
 
 
+def tcp_health_check(host: str = "127.0.0.1", port: int = 5432, timeout: float = 3.0) -> tuple[bool, str]:
+    """Check if a TCP port is accepting connections. Returns (healthy, detail)."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, f"Port {port} accepting connections"
+    except ConnectionRefusedError:
+        return False, f"Port {port} connection refused"
+    except TimeoutError:
+        return False, f"Port {port} connection timed out"
+    except Exception as e:
+        return False, f"Port {port}: {e}"
+
+
 def run_cmd(cmd: list):
     # uses POpen to run command and yield output line by line in real time
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return process
+
+
+def get_aws_profiles_by_file(credentials_path: Optional[str] = None) -> list[str]:
+    """Read AWS profile names from ~/.aws/credentials (INI section headers)."""
+    import configparser
+    if not credentials_path:
+        credentials_path = resolve_absolute_path("~/.aws/credentials")
+    else:
+        credentials_path = resolve_absolute_path(credentials_path)
+    if not os.path.exists(credentials_path):
+        logger.warning(f"AWS credentials file not found: {credentials_path}")
+        return []
+    try:
+        config = configparser.ConfigParser()
+        config.read(credentials_path)
+        return config.sections()
+    except Exception as e:
+        logger.error(f"Failed to read AWS credentials file: {e}")
+        return []
+
+
+def get_aws_profiles_by_cli() -> list[str]:
+    """Get AWS profile names using `aws configure list-profiles` (falls back to `aws configure list`)."""
+    try:
+        process = run_cmd(["aws", "configure", "list-profiles"])
+        output = process.stdout.read().strip() if process.stdout else ""
+        process.wait()
+        if process.returncode == 0 and output:
+            return [p.strip() for p in output.splitlines() if p.strip()]
+    except Exception as e:
+        logger.warning(f"aws configure list-profiles failed: {e}")
+
+    # Fallback for older AWS CLI versions
+    try:
+        process = run_cmd(["aws", "configure", "list"])
+        output = process.stdout.read().strip() if process.stdout else ""
+        process.wait()
+        if process.returncode == 0 and output:
+            # Parse the "profile" line from the table output
+            for line in output.splitlines():
+                parts = line.split()
+                if parts and parts[0] == "profile":
+                    profile = parts[1] if len(parts) > 1 else ""
+                    if profile and profile != "<not":
+                        return [profile]
+    except Exception as e:
+        logger.warning(f"aws configure list fallback also failed: {e}")
+
+    return []
 
 
 def ensure_elevated_privileges():

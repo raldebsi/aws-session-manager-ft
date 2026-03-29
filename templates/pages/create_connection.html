@@ -24,9 +24,10 @@
             <label class="form-label">Name <span class="required">*</span></label>
             <input class="form-input" id="connName" placeholder="e.g. Production Mumbai" />
         </div>
-        <div class="form-group">
-            <label class="form-label">Cluster <span class="required">*</span></label>
+        <div class="form-group" id="clusterGroup">
+            <label class="form-label">Cluster <span class="required" id="clusterRequired">*</span></label>
             <input class="form-input" id="connCluster" placeholder="e.g. MY-CLUSTER" />
+            <span class="form-hint" id="clusterHint"></span>
         </div>
         <div class="form-group">
             <label class="form-label">Region <span class="required">*</span></label>

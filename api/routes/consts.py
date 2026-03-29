@@ -2,7 +2,7 @@ import pyperclip
 from flask import Blueprint, jsonify, request
 
 from src.common import SETTINGS_DEFAULTS
-from src.utils.utils import get_pid_on_port, kill_pid
+from src.utils.utils import get_pid_on_port, kill_pid, get_aws_profiles_by_file, get_aws_profiles_by_cli
 
 consts_bp = Blueprint("consts", __name__, url_prefix="/api/consts")
 
@@ -18,6 +18,13 @@ CONSTS = {
         "remote_port": 443,
         "profile": "default",
         "kubeconfig_path": "~/.kube/config",
+    },
+    "field_overrides": {
+        "type": {
+            "eks": {"remote_port": 443},
+            "rds": {"remote_port": 5432},
+            "ec2": {"remote_port": 22},
+        }
     },
     "settings_schema": {
         "max_log_size": {
@@ -54,12 +61,20 @@ CONSTS = {
             "order": 4,
             "group": "Intervals",
         },
+        "healthcheck_timeout": {
+            "label": "Health Check Timeout (seconds)",
+            "type": "number",
+            "min": 3,
+            "default": SETTINGS_DEFAULTS["healthcheck_timeout"],
+            "order": 5,
+            "group": "Intervals",
+        },
         "default_kubeconfig_path": {
             "label": "Default Kube Config Path",
             "hint": "Only for new connections",
             "type": "path",
             "default": SETTINGS_DEFAULTS["default_kubeconfig_path"],
-            "order": 5,
+            "order": 6,
             "solo": True,
         },
     },
@@ -110,6 +125,32 @@ def pid_kill(pid):
     if success:
         return jsonify({"pid": pid, "killed": True})
     return jsonify({"pid": pid, "killed": False, "error": "Failed to kill process"}), 500
+
+
+@consts_bp.route("/aws/profiles", methods=["GET"])
+def aws_profiles():
+    """Get AWS profiles from credentials file and CLI. Returns deduplicated merged list."""
+    file_profiles = get_aws_profiles_by_file()
+    cli_profiles = get_aws_profiles_by_cli()
+    seen = set()
+    merged = []
+    for p in file_profiles + cli_profiles:
+        if p not in seen:
+            seen.add(p)
+            merged.append(p)
+    return jsonify({"profiles": merged, "sources": {"file": file_profiles, "cli": cli_profiles}})
+
+
+@consts_bp.route("/aws/profiles/file", methods=["GET"])
+def aws_profiles_file():
+    """Get AWS profiles from ~/.aws/credentials file."""
+    return jsonify({"profiles": get_aws_profiles_by_file()})
+
+
+@consts_bp.route("/aws/profiles/cli", methods=["GET"])
+def aws_profiles_cli():
+    """Get AWS profiles using AWS CLI."""
+    return jsonify({"profiles": get_aws_profiles_by_cli()})
 
 
 @consts_bp.route("/browse-save", methods=["POST"])

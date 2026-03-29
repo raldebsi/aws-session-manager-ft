@@ -193,37 +193,61 @@ def get_k8s_current_context(kubeconfig_path=None):
     process.wait()
     return context
 
-def k8s_health_check(context=None, kubeconfig_path=None):
+def _run_cmd_with_timeout(cmd, timeout=10):
+    """Run a command with timeout. Returns (stdout, stderr). Kills process tree on timeout."""
+    import subprocess
+    process = run_cmd(cmd)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return stdout.strip() if stdout else "", stderr.strip() if stderr else ""
+    except subprocess.TimeoutExpired:
+        # Kill process + children, then collect remaining output
+        try:
+            import psutil
+            parent = psutil.Process(process.pid)
+            for child in parent.children(recursive=True):
+                child.kill()
+            parent.kill()
+        except Exception:
+            process.kill()
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+
+
+def k8s_health_check(context=None, kubeconfig_path=None, timeout=10):
     """Check if Kubernetes cluster is reachable by getting the healthz endpoint."""
+    import subprocess
     cmd = ["kubectl", "get", "--raw", "/healthz"]
     cmd += _add_optional_args(context=context, kubeconfig_path=kubeconfig_path)
-    process = run_cmd(cmd)
-    output = process.stdout.read().strip() if process.stdout else ""
-    if not output:
-        logger.error(process.stderr.read() if process.stderr else "No output from kubectl health check")
-        return (False, "")
+    try:
+        output, error = _run_cmd_with_timeout(cmd, timeout=timeout)
+        if not output:
+            error = error or "No output from kubectl health check"
+            logger.error(error)
+            return (False, error)
+        logger.info(f"Kubernetes health check output: {output}")
+        return (output == "ok", output)
+    except subprocess.TimeoutExpired:
+        logger.error(f"Kubernetes health check timed out after {timeout}s")
+        return (False, f"Timed out after {timeout}s")
 
-    process.wait()
-    logger.info(f"Kubernetes health check output: {output}")
-    return (output == "ok", output)
 
-
-def get_k8s_nodes(context=None, kubeconfig_path=None):
+def get_k8s_nodes(context=None, kubeconfig_path=None, timeout=10):
     """Get the list of Kubernetes nodes using kubectl."""
+    import subprocess
     cmd = ["kubectl", "get", "nodes", "-o", "name"]
-
     cmd += _add_optional_args(context=context, kubeconfig_path=kubeconfig_path)
-
-    process = run_cmd(cmd)
-
-    output = [line.strip() for line in process.stdout] if process.stdout else []
-    if not output:
-        logger.error(process.stderr.read() if process.stderr else "No output from kubectl get nodes")
-        return []
-
-    nodes = output
-    process.wait()
-    return nodes
+    try:
+        output, error = _run_cmd_with_timeout(cmd, timeout=timeout)
+        nodes = [line.strip() for line in output.splitlines() if line.strip()]
+        if not nodes:
+            error = error or "No output from kubectl get nodes"
+            logger.error(error)
+            return [], error
+        return nodes, output
+    except subprocess.TimeoutExpired:
+        logger.error(f"kubectl get nodes timed out after {timeout}s")
+        return [], f"Timed out after {timeout}s"
 
 
 def start_eks_tunnel(

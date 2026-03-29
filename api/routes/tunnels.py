@@ -3,11 +3,28 @@ import threading
 
 from flask import Blueprint, jsonify, request
 
-from src.common import tunnel_manager
-from src.utils.kube import k8s_health_check, start_eks_tunnel
+from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
+from src.utils.data_loaders import load_user_config, load_connections
+from src.utils.kube import k8s_health_check, start_eks_tunnel, start_ssm_tunnel
+from src.utils.utils import tcp_health_check
 from src.utils.utils import logger
 
 tunnels_bp = Blueprint("tunnels", __name__, url_prefix="/api/tunnels")
+
+DEFAULT_PORTS = {"eks": 443, "rds": 5432}
+
+def _resolve_tunnel_type(connection_key):
+    """Look up the connection type from config. Falls back to 'eks'."""
+    try:
+        user_config = load_user_config(USER_CONFIG_PATH)
+        uc = user_config.connections.get(connection_key)
+        if not uc:
+            return "eks"
+        connections = load_connections(CONNECTIONS_CONFIG_PATH)
+        conn = connections.get(uc.connection_id)
+        return conn.type.lower() if conn else "eks"
+    except Exception:
+        return "eks"
 
 
 @tunnels_bp.route("", methods=["GET"])
@@ -18,47 +35,66 @@ def list_tunnels():
 
 @tunnels_bp.route("/start", methods=["POST"])
 def start_tunnel():
-    """Start an SSM EKS tunnel.
+    """Start an SSM tunnel (EKS or RDS).
 
     Body: {
+        "type": "eks" or "rds",
         "profile": "default",
         "endpoint": "some.endpoint.com",
         "bastion": "i-0abc123",
-        "cluster_name": "my-cluster",
         "region": "us-east-1",
         "tunnel_connection_id": "my-conn",
         "document_name": "AWS-StartPortForwardingSessionToRemoteHost",  (optional)
         "local_port": 443,   (optional)
         "remote_port": 443,  (optional)
+        --- EKS only ---
+        "cluster_name": "my-cluster",
         "kubeconfig_path": "~/.kube/config"  (optional)
     }
     """
     data = request.get_json(force=True)
+    tunnel_type = data.get("type", "eks").lower()
+    default_port = DEFAULT_PORTS.get(tunnel_type, 443)
 
-    required = ["profile", "endpoint", "bastion", "cluster_name", "region", "tunnel_connection_id"]
+    required = ["profile", "endpoint", "bastion", "region", "tunnel_connection_id"]
+    if tunnel_type == "eks":
+        required.append("cluster_name")
     missing = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
 
-    tunnel_id = start_eks_tunnel(
-        profile=data["profile"],
-        endpoint=data["endpoint"],
-        bastion=data["bastion"],
-        cluster_name=data["cluster_name"],
-        region=data["region"],
-        tunnel_connection_id=data["tunnel_connection_id"],
-        document_name=data.get("document_name", "AWS-StartPortForwardingSessionToRemoteHost"),
-        local_port=int(data.get("local_port", 443)),
-        remote_port=int(data.get("remote_port", 443)),
-        kubeconfig_path=data.get("kubeconfig_path"),
-    )
+    if tunnel_type == "eks":
+        tunnel_id = start_eks_tunnel(
+            profile=data["profile"],
+            endpoint=data["endpoint"],
+            bastion=data["bastion"],
+            cluster_name=data["cluster_name"],
+            region=data["region"],
+            tunnel_connection_id=data["tunnel_connection_id"],
+            document_name=data.get("document_name", "AWS-StartPortForwardingSessionToRemoteHost"),
+            local_port=int(data.get("local_port", default_port)),
+            remote_port=int(data.get("remote_port", default_port)),
+            kubeconfig_path=data.get("kubeconfig_path"),
+        )
+    else:
+        # RDS and other types: just start the SSM tunnel directly (no kubeconfig/hosts setup)
+        tunnel_id = start_ssm_tunnel(
+            profile=data["profile"],
+            endpoint=data["endpoint"],
+            bastion=data["bastion"],
+            region=data["region"],
+            tunnel_connection_id=data["tunnel_connection_id"],
+            document_name=data.get("document_name", "AWS-StartPortForwardingSessionToRemoteHost"),
+            local_port=int(data.get("local_port", default_port)),
+            remote_port=int(data.get("remote_port", default_port)),
+        )
 
     if tunnel_id is None:
         return jsonify({"error": "Failed to start tunnel"}), 500
 
     if tunnel_id == "":
         return jsonify({"warning": "Tunnel for this connection is already running"}), 200
-    
+
     return jsonify({"tunnel_id": tunnel_id, "status": "started"})
 
 @tunnels_bp.route("/<path:tunnel_id>", methods=["GET"])
@@ -99,9 +135,20 @@ def stop_tunnel(tunnel_id):
         else:
             break
     
-    status, status_out = k8s_health_check(connection_id)
-    
-    return jsonify({"tunnel_id": tunnel_id, "stopped": not status, "tunnel_state": tunnel_state})
+    # Type-aware health check to confirm the tunnel is actually down
+    tunnel_type = _resolve_tunnel_type(tunnel_id)
+    if tunnel_type == "eks":
+        healthy, _ = k8s_health_check(connection_id)
+        stopped = not healthy
+    else:
+        # For RDS/other: check if the port is still accepting connections
+        user_config = load_user_config(USER_CONFIG_PATH)
+        uc = user_config.connections.get(tunnel_id)
+        port = uc.local_port if uc else 5432
+        healthy, _ = tcp_health_check(port=port)
+        stopped = not healthy
+
+    return jsonify({"tunnel_id": tunnel_id, "stopped": stopped, "tunnel_state": tunnel_state})
 
 
 @tunnels_bp.route("/<path:tunnel_id>/logs", methods=["GET"])

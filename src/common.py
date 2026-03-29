@@ -33,6 +33,7 @@ SETTINGS_DEFAULTS = {
     "max_tunnels": 5,
     "polling_interval": 1,
     "readiness_timeout": 20,
+    "healthcheck_timeout": 10,
 }
 
 

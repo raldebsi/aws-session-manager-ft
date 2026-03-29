@@ -12,7 +12,8 @@ const _origConsole = {
 
 function _captureConsole(level, args) {
     const text = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
-    const entry = { stream: level === 'error' ? 'stderr' : (level === 'warn' ? 'frontend' : 'stdout'), text: `[${level}] ${text}` };
+    const stream = level === 'error' ? 'stderr' : (level === 'warn' ? 'system' : 'system');
+    const entry = { stream, text: `[${level}] ${text}` };
     if (_systemLogReady) {
         const tab = ensureConsoleTab(SYSTEM_LOG_KEY);
         appendLog(tab, entry);
@@ -104,14 +105,18 @@ let CONSTS = null;
 let SETTINGS = null;
 
 async function loadConsts() {
+    console.log('[init] Loading consts...');
     const res = await fetch('/api/consts');
     CONSTS = await res.json();
+    console.log('[init] Consts loaded:', Object.keys(CONSTS).join(', '));
     return CONSTS;
 }
 
 async function loadSettings() {
+    console.log('[init] Loading settings...');
     const res = await fetch('/api/settings');
     SETTINGS = await res.json();
+    console.log('[init] Settings loaded:', JSON.stringify(SETTINGS));
     return SETTINGS;
 }
 
@@ -149,8 +154,23 @@ const paneRenderers = {
     settingsPane: renderSettings,
 };
 
+let _formDirty = false;
+
+function markFormDirty() { _formDirty = true; }
+function clearFormDirty() { _formDirty = false; }
+
+function confirmIfDirty() {
+    if (!_formDirty) return true;
+    if (confirm('You have unsaved changes. Discard them?')) {
+        clearFormDirty();
+        return true;
+    }
+    return false;
+}
+
 function switchPane(paneId) {
     if (currentPane === paneId) return;
+    if (!confirmIfDirty()) return;
     currentPane = paneId;
 
     document.querySelectorAll('.sidebar-pane').forEach(p => p.classList.remove('active'));
@@ -205,18 +225,35 @@ function indicatorDetail(health, indicator) {
 }
 
 async function checkSessionHealth(key, check = null) {
+    console.log(`[health] Checking ${check || 'all'} for ${key}...`);
     sessionChecking[key] = true;
     renderAll();
-    const params = check ? `?check=${check}` : '';
+
+    // Safety release: if the check hangs, unlock after 20s
+    const safetyTimer = setTimeout(() => {
+        if (sessionChecking[key]) {
+            console.warn(`[health] ${key}: safety timeout — releasing lock after 20s`);
+            delete sessionChecking[key];
+            renderAll();
+        }
+    }, 20000);
+
+    const query = new URLSearchParams();
+    if (check) query.set('check', check);
+    const hcTimeout = getSetting('healthcheck_timeout');
+    if (hcTimeout) query.set('timeout', hcTimeout);
+    const params = query.toString() ? `?${query}` : '';
     try {
         const res = await fetch(`/api/sessions/${key}/health${params}`);
         if (!res.ok) return null;
         const data = await res.json();
         if (!sessionHealth[key]) sessionHealth[key] = {};
         Object.assign(sessionHealth[key], data);
+        console.log(`[health] ${key} result:`, JSON.stringify(data));
         return data;
-    } catch { return null; }
+    } catch (err) { console.warn(`[health] ${key} check failed:`, err); return null; }
     finally {
+        clearTimeout(safetyTimer);
         delete sessionChecking[key];
     }
 }
@@ -226,6 +263,7 @@ async function refreshAllHealth() {
     if (btn) btn.classList.add('spinning');
     await fetchSessions();
     const active = sessions.filter(s => isActive(s));
+    console.log(`[health] Refreshing all — ${active.length} active session(s)`);
     await Promise.all(active.map(s => checkSessionHealth(s.key)));
     renderAll();
     if (btn) btn.classList.remove('spinning');
@@ -235,6 +273,10 @@ async function fetchSessions() {
     const res = await fetch('/api/sessions');
     sessions = await res.json();
     sessions.forEach(s => sessionSearchIndex.delete(s));
+    const active = sessions.filter(s => s.status === 'active').length;
+    const errored = sessions.filter(s => s.status === 'error').length;
+    const conflicts = sessions.filter(s => s.status === 'port_conflict').length;
+    console.log(`[sessions] Fetched ${sessions.length} sessions (${active} active, ${errored} errored, ${conflicts} port conflicts)`);
     return sessions;
 }
 
@@ -251,7 +293,7 @@ function isPortConflict(session) {
 }
 
 async function toggleSession(session) {
-    if (tunnelBusy) return;
+    if (tunnelBusy) { console.log(`[toggle] ${session.key}: blocked — tunnelBusy`); return; }
 
     if (isPortConflict(session)) {
         showToast(`Port ${session.localPort} is in use by another process (PID ${session.portPid}). Use the kill button to free it.`, 'warning');
@@ -271,6 +313,7 @@ async function toggleSession(session) {
     }
 
     tunnelBusy = true;
+    console.log(`[toggle] ${session.key}: ${isActive(session) ? 'disconnecting' : 'connecting'}...`);
 
     try {
         if (isActive(session)) {
@@ -291,6 +334,7 @@ async function disconnectSession(session) {
     const key = session.key;
     const name = session.name;
     const tunnelId = session.tunnelId;
+    console.log(`[disconnect] ${key}: starting disconnect (tunnelId=${tunnelId})`);
 
     if (!tunnelId) {
         showToast('No tunnel ID found for this session', 'error');
@@ -317,6 +361,7 @@ async function disconnectSession(session) {
             return;
         }
 
+        console.log(`[disconnect] ${key}: backend confirmed stopped=${data.stopped}, tunnel_state=${data.tunnel_state}`);
         logFrontend(key, 'Tunnel stopped');
 
         // Fetch final logs from the killed tunnel process
@@ -329,7 +374,12 @@ async function disconnectSession(session) {
         showToast(err.message, 'error');
     }
 
+    const prevStatus = session.status;
     await fetchSessions();
+    const updated = sessions.find(s => s.key === key);
+    if (updated && updated.status === 'error' && prevStatus === 'stopping') {
+        console.warn(`[disconnect] ${key}: fetchSessions overrode stopping → error (tunnel_state: ${updated.tunnelState})`);
+    }
     refreshConsoleBody();
 }
 
@@ -337,6 +387,7 @@ async function disconnectSession(session) {
 
 async function forceKillPort(session) {
     const port = session.localPort;
+    console.log(`[nuke] Checking port ${port} for ${session.key}...`);
 
     // First check what's on the port
     let pid;
@@ -364,6 +415,7 @@ async function forceKillPort(session) {
         });
         const data = await res.json();
         if (data.killed) {
+            console.log(`[nuke] Killed PID ${pid} on port ${port}`);
             showToast(`Killed PID ${pid} on port ${port}`, 'success');
             openConsoleTab(session.key);
             logFrontend(session.key, `Force killed PID ${pid} on port ${port}`);
@@ -382,6 +434,7 @@ async function forceKillPort(session) {
 
 async function connectSession(session) {
     const key = session.key;
+    console.log(`[connect] ${key}: starting connect pipeline`);
     session.status = 'starting';
     renderAll();
     openConsoleTab(key);
@@ -400,31 +453,40 @@ async function connectSession(session) {
         }
 
         const conn = mapped.connection;
-        logFrontend(key, `Resolved: ${conn.cluster} @ ${conn.region} (${conn.type})`);
+        console.log(`[connect] ${key}: resolved — type=${conn.type}, region=${conn.region}, port=${mapped.local_port}→${conn.remote_port}`);
+        logFrontend(key, `Resolved: ${conn.cluster || conn.name} @ ${conn.region} (${conn.type})`);
 
-        // Step 2: Start tunnel (handles kubeconfig setup + hosts/cluster config + SSM spawn)
-        logFrontend(key, '[2/3] Starting tunnel (kubeconfig + SSM)...');
+        // Step 2: Start tunnel
+        const connType = (conn.type || 'eks').toLowerCase();
+        const isEks = connType === 'eks';
+        logFrontend(key, `[2/3] Starting ${connType.toUpperCase()} tunnel...`);
         renderAll();
+
+        const startBody = {
+            type: connType,
+            profile: mapped.profile,
+            endpoint: conn.endpoint,
+            bastion: mapped.bastion,
+            region: conn.region,
+            tunnel_connection_id: key,
+            document_name: conn.document,
+            local_port: mapped.local_port,
+            remote_port: conn.remote_port,
+        };
+        if (isEks) {
+            startBody.cluster_name = conn.cluster;
+            startBody.kubeconfig_path = mapped.kubeconfig_path;
+        }
 
         const tunnelRes = await fetch('/api/tunnels/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                profile: mapped.profile,
-                endpoint: conn.endpoint,
-                bastion: mapped.bastion,
-                cluster_name: conn.cluster,
-                region: conn.region,
-                tunnel_connection_id: key,
-                document_name: conn.document,
-                local_port: mapped.local_port,
-                remote_port: conn.remote_port,
-                kubeconfig_path: mapped.kubeconfig_path
-            })
+            body: JSON.stringify(startBody)
         });
         const tunnelData = await tunnelRes.json();
 
         if (tunnelData.warning) {
+            console.log(`[connect] ${key}: tunnel already running`);
             logFrontend(key, 'Tunnel already running');
             await fetchSessions();
             return;
@@ -435,6 +497,7 @@ async function connectSession(session) {
 
         const tunnelId = tunnelData.tunnel_id;
         session.tunnelId = tunnelId;
+        console.log(`[connect] ${key}: tunnel started (id=${tunnelId})`);
         logFrontend(key, `Tunnel started: ${tunnelId}`);
 
         // Step 3: Wait for readiness (poll stdout)
@@ -445,6 +508,7 @@ async function connectSession(session) {
         const pollMs = getSetting('polling_interval') * 1000;
         const timeoutMs = getSetting('readiness_timeout') * 1000;
         const maxAttempts = Math.ceil(timeoutMs / pollMs);
+        console.log(`[connect] ${key}: polling readiness (interval=${pollMs}ms, timeout=${timeoutMs}ms, maxAttempts=${maxAttempts})`);
         for (let i = 0; i < maxAttempts; i++) {
             await sleep(pollMs);
             await fetchAndAppendLogs(key);
@@ -468,43 +532,61 @@ async function connectSession(session) {
         }
 
         if (!ready) {
+            console.warn(`[connect] ${key}: readiness timeout — checking tunnel state`);
+            // Check if the tunnel process already died
+            const stateRes = await fetch(`/api/tunnels/${tunnelId}`);
+            if (stateRes.ok) {
+                const stateData = await stateRes.json();
+                const st = stateData.state;
+                if (st && st !== 'starting' && st !== 'running') {
+                    throw new Error(`Tunnel process exited (${st})`);
+                }
+            }
             logFrontend(key, 'WARNING: Readiness not confirmed (timeout) — tunnel may still be starting');
             showToast(`"${session.name}" started but readiness not confirmed`, 'warning');
         } else {
+            console.log(`[connect] ${key}: tunnel ready`);
             logFrontend(key, 'Tunnel is ready');
         }
 
-        // K8s health check — capture result into health indicators
-        logFrontend(key, 'Verifying Kubernetes connectivity...');
-        try {
-            const healthQuery = new URLSearchParams();
-            if (mapped.kubeconfig_path) healthQuery.set('kubeconfig_path', mapped.kubeconfig_path);
-            healthQuery.set('context', key);
-            console.log(`Checking K8s health with query: ${healthQuery.toString()}`);
-            const healthRes = await fetch(`/api/kube/health?${healthQuery}`);
-            const healthData = await healthRes.json();
-            if (healthData.status === 'ok') {
-                logFrontend(key, 'Kubernetes health check passed');
-                setHealth(key, 'k8s', 'green', 'Health check passed');
-            } else {
-                logFrontend(key, `WARNING: K8s health: ${healthData.message || 'unhealthy'}`);
-                setHealth(key, 'k8s', 'red', healthData.message || 'Unhealthy');
+        // Service health check — type-aware
+        if (isEks) {
+            logFrontend(key, 'Verifying Kubernetes connectivity...');
+            try {
+                const healthQuery = new URLSearchParams();
+                if (mapped.kubeconfig_path) healthQuery.set('kubeconfig_path', mapped.kubeconfig_path);
+                healthQuery.set('context', key);
+                const hcto = getSetting('healthcheck_timeout');
+                if (hcto) healthQuery.set('timeout', hcto);
+                const healthRes = await fetch(`/api/kube/health?${healthQuery}`);
+                const healthData = await healthRes.json();
+                if (healthData.status === 'ok') {
+                    logFrontend(key, 'Kubernetes health check passed');
+                    setHealth(key, 'service', 'green', 'K8s health check passed');
+                } else {
+                    logFrontend(key, `WARNING: K8s health: ${healthData.message || 'unhealthy'}`);
+                    setHealth(key, 'service', 'red', healthData.message || 'Unhealthy');
+                }
+            } catch {
+                logFrontend(key, 'WARNING: K8s health check failed (non-critical)');
+                setHealth(key, 'service', 'red', 'Health check failed');
             }
-        } catch {
-            logFrontend(key, 'WARNING: K8s health check failed (non-critical)');
-            setHealth(key, 'k8s', 'red', 'Health check failed');
+        } else {
+            logFrontend(key, 'Verifying service connectivity...');
+            // TCP health check handled by the service health endpoint
         }
 
         logSystem(key, '\u2014 Connected successfully \u2014');
         showToast(`Connected "${session.name}"`, 'success');
 
-        // Auto-check port + tunnel health (non-blocking)
-        Promise.all([
-            checkSessionHealth(key, 'port'),
-            checkSessionHealth(key, 'tunnel'),
-        ]).then(() => renderAll());
+        // Auto-check port, service (for non-EKS), and tunnel health (non-blocking)
+        const autoChecks = ['port', 'tunnel'];
+        if (!isEks) autoChecks.push('service');
+        console.log(`[connect] ${key}: auto-checking health — ${autoChecks.join(', ')}`);
+        Promise.all(autoChecks.map(c => checkSessionHealth(key, c))).then(() => renderAll());
 
     } catch (err) {
+        console.error(`[connect] ${key}: pipeline failed —`, err.message);
         logFrontend(key, `FAILED: ${err.message}`);
         logSystem(key, '\u2014 Connection failed \u2014');
         showToast(err.message, 'error');
@@ -580,6 +662,7 @@ function filterSessions(query) {
 }
 
 async function renderDashboard() {
+    console.log('[dashboard] Rendering dashboard');
     const [html] = await Promise.all([fetchPage('dashboard'), fetchSessions()]);
     mainContentBody.innerHTML = html;
 
@@ -625,10 +708,10 @@ function refreshDashboardContent() {
     }
 
     if (dashboardView === 'all') {
-        renderFlatView(container, filtered);
+        renderAllView(container, filtered);
     } else {
-        const groupKey = dashboardView === 'region' ? 'region' : 'connectionId';
-        renderGroupedView(container, filtered, groupKey);
+        const groupKeys = { grouped: 'connectionId', region: 'region', type: 'type' };
+        renderGroupedView(container, filtered, groupKeys[dashboardView] || 'connectionId');
     }
 }
 
@@ -658,15 +741,19 @@ function renderGroupedView(container, filtered, groupKey) {
         const group = document.createElement('div');
         group.className = 'dashboard-group';
 
-        const badgeHtml = groupKey !== 'region'
-            ? `<span class="dashboard-group-badge">${groupSessions[0].region}</span>`
-            : '';
+        let badgeHtml = '';
+        if (groupKey === 'type') {
+            const regions = new Set(groupSessions.map(s => s.region).filter(Boolean));
+            badgeHtml = `<span class="dashboard-group-badge">${regions.size} region${regions.size !== 1 ? 's' : ''}</span>`;
+        } else if (groupKey !== 'region') {
+            badgeHtml = `<span class="dashboard-group-badge">${groupSessions[0].region}</span>`;
+        }
 
         const header = document.createElement('div');
         header.className = 'dashboard-group-header';
         header.innerHTML = `
             <i class="fa-solid fa-chevron-down dashboard-group-chevron"></i>
-            <span class="dashboard-group-name">${groupId}</span>
+            <span class="dashboard-group-name">${groupKey === 'type' ? groupId.toUpperCase() : groupId}</span>
             ${badgeHtml}
             <span class="dashboard-group-count">${groupSessions.length}</span>
         `;
@@ -686,17 +773,41 @@ function renderGroupedView(container, filtered, groupKey) {
     }
 }
 
-function renderFlatView(container, filtered) {
-    const grid = document.createElement('div');
-    grid.className = 'dashboard-sessions';
-    filtered.forEach(s => grid.appendChild(createDashboardCard(s)));
-    container.appendChild(grid);
+function renderAllView(container, filtered) {
+    const regions = new Set(filtered.map(s => s.region).filter(Boolean));
+    const types = new Set(filtered.map(s => s.type).filter(Boolean));
+
+    const group = document.createElement('div');
+    group.className = 'dashboard-group';
+
+    const header = document.createElement('div');
+    header.className = 'dashboard-group-header';
+    header.innerHTML = `
+        <i class="fa-solid fa-chevron-down dashboard-group-chevron"></i>
+        <span class="dashboard-group-name">All</span>
+        <span class="dashboard-group-badge">${filtered.length} sessions</span>
+        <span class="dashboard-group-badge">${regions.size} region${regions.size !== 1 ? 's' : ''}</span>
+        <span class="dashboard-group-badge">${types.size} type${types.size !== 1 ? 's' : ''}</span>
+    `;
+
+    const cards = document.createElement('div');
+    cards.className = 'dashboard-group-cards';
+    filtered.forEach(s => cards.appendChild(createDashboardCard(s)));
+
+    header.addEventListener('click', () => {
+        header.classList.toggle('collapsed');
+        cards.style.display = header.classList.contains('collapsed') ? 'none' : '';
+    });
+
+    group.appendChild(header);
+    group.appendChild(cards);
+    container.appendChild(group);
 }
 
 function healthIndicatorsHtml(session) {
     const h = getHealth(session.key);
     const items = [
-        { key: 'k8s',    icon: 'fa-dharmachakra', label: 'K8s' },
+        { key: 'service', icon: 'fa-layer-group',  label: 'Service' },
         { key: 'port',   icon: 'fa-plug',         label: 'Port' },
         { key: 'tunnel', icon: 'fa-link',          label: 'Tunnel' },
     ];
@@ -1030,6 +1141,7 @@ function appendLog(tab, entry) {
 }
 
 function pushLogToBackend(key, type, text) {
+    // Fire-and-forget push to backend tunnel log
     const session = sessions.find(s => s.key === key);
     const tunnelId = session?.tunnelId || key;
     // Fire-and-forget — don't await, don't block UI
@@ -1055,6 +1167,7 @@ function logSystem(key, msg) {
 }
 
 function openConsoleTab(key) {
+    console.log(`[console] Opening tab: ${key}`);
     const tab = ensureConsoleTab(key);
     tab.open = true;
     activeConsoleKey = key;
@@ -1134,7 +1247,7 @@ const STREAM_PREFIXES = {
     stdout:   '[tunnel] ',
     stderr:   '[error]  ',
     frontend: '[client] ',
-    system:   '         ',
+    system:   '',
 };
 
 let _consoleRenderedKey = null;
@@ -1237,7 +1350,7 @@ async function goBackToConnections() {
 
 function connectionFingerprint(conn) {
     const bastionStr = JSON.stringify(conn.bastions || {}, Object.keys(conn.bastions || {}).sort());
-    return `${conn.type}|${conn.cluster}|${conn.region}|${conn.endpoint}|${conn.document}|${conn.remote_port}|${bastionStr}`;
+    return `${conn.type}|${conn.cluster || ''}|${conn.region}|${conn.endpoint}|${conn.document}|${conn.remote_port}|${bastionStr}`;
 }
 
 function findDuplicateConnections(connections) {
@@ -1329,7 +1442,7 @@ function createConnCard(data, type, key, flags = {}) {
     const icon = type === 'connection' ? 'fa-server' : 'fa-user';
     const badge = data.type ? data.type.toUpperCase() : '';
     const detail = type === 'connection'
-        ? `${data.region} \u00b7 ${data.cluster}`
+        ? `${data.region}${data.cluster ? ` \u00b7 ${data.cluster}` : ''}`
         : data.detail;
 
     let dupIcon = '';
@@ -1485,9 +1598,37 @@ async function renderCreateConnectionForm(editData = null, editKey = null) {
         document.getElementById('pasteClipboardBtn').style.display = 'none';
     }
 
+    clearFormDirty();
     populateSelect(document.getElementById('connType'), CONSTS.connection_types, 'value', 'label');
     document.getElementById('connRemotePort').value = CONSTS.defaults.remote_port;
     document.getElementById('connDocument').value = CONSTS.defaults.ssm_document;
+
+    const fieldMap = {
+        remote_port: document.getElementById('connRemotePort'),
+    };
+
+    function applyFieldOverrides() {
+        const type = document.getElementById('connType').value.toLowerCase();
+        const overrides = CONSTS.field_overrides?.type || {};
+        const values = overrides[type] || overrides['default'] || {};
+
+        // Apply overrides, falling back to defaults for fields not in the override
+        for (const [field, el] of Object.entries(fieldMap)) {
+            if (field in values) {
+                el.value = values[field];
+            } else if (CONSTS.defaults[field] !== undefined) {
+                el.value = CONSTS.defaults[field];
+            }
+        }
+
+        // Cluster visibility
+        const isEks = type === 'eks';
+        document.getElementById('clusterGroup').style.display = isEks ? '' : 'none';
+        document.getElementById('clusterRequired').style.display = isEks ? '' : 'none';
+        if (!isEks) document.getElementById('connCluster').value = '';
+    }
+    document.getElementById('connType').addEventListener('change', applyFieldOverrides);
+    applyFieldOverrides();
 
     if (editData) {
         fillConnectionForm(editData);
@@ -1515,8 +1656,14 @@ async function renderCreateConnectionForm(editData = null, editKey = null) {
         btn.addEventListener('click', () => btn.closest('.bastion-row').remove());
     });
 
-    document.getElementById('cancelConnBtn').addEventListener('click', goBackToConnections);
+    document.getElementById('cancelConnBtn').addEventListener('click', () => {
+        if (confirmIfDirty()) goBackToConnections();
+    });
     document.getElementById('saveConnBtn').addEventListener('click', () => saveConnection(isEdit ? editKey : null));
+
+    // Track changes on all form inputs
+    mainContentBody.querySelectorAll('input, select').forEach(el => el.addEventListener('input', markFormDirty));
+    mainContentBody.querySelectorAll('select').forEach(el => el.addEventListener('change', markFormDirty));
 
     if (!isEdit) {
         document.getElementById('pasteClipboardBtn').addEventListener('click', async () => {
@@ -1539,7 +1686,8 @@ async function saveConnection(editKey) {
     const ssmDocument = document.getElementById('connDocument').value.trim();
     const remotePort = parseInt(document.getElementById('connRemotePort').value) || CONSTS.defaults.remote_port;
 
-    if (!id || !type || !name || !cluster || !region || !endpoint) {
+    const isEksType = type.toLowerCase() === 'eks';
+    if (!id || !type || !name || !region || !endpoint || (isEksType && !cluster)) {
         msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Please fill in all required fields.</div>';
         return;
     }
@@ -1559,13 +1707,15 @@ async function saveConnection(editKey) {
         const res = await fetch(url, {
             method,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, type, name, cluster, region, endpoint, document: ssmDocument, remote_port: remotePort, bastions })
+            body: JSON.stringify({ id, type, name, region, endpoint, document: ssmDocument, remote_port: remotePort, bastions, ...(cluster ? { cluster } : {}) })
         });
         const data = await res.json();
         if (!res.ok) {
             msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${data.error}</div>`;
             return;
         }
+        clearFormDirty();
+        console.log(`[config] Connection "${name}" ${isEdit ? 'updated' : 'created'} (id=${id}, type=${type})`);
         showToast(`Connection "${name}" ${isEdit ? 'updated' : 'created'}`, 'success');
         invalidateCaches();
         setTimeout(goBackToConnections, 600);
@@ -1631,7 +1781,64 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
     updateBastions();
     connSelect.addEventListener('change', updateBastions);
 
-    document.getElementById('ucProfile').value = CONSTS.defaults.profile;
+    // AWS Profile combo: fetch profiles, populate dropdown + custom input
+    const profileSelect = document.getElementById('ucProfileSelect');
+    const profileCustom = document.getElementById('ucProfileCustom');
+    const profileHidden = document.getElementById('ucProfile');
+
+    function syncProfile() {
+        const val = profileSelect.value;
+        if (val === '__custom__') {
+            profileCustom.style.display = '';
+            profileHidden.value = profileCustom.value;
+        } else {
+            profileCustom.style.display = 'none';
+            profileHidden.value = val;
+        }
+    }
+    profileSelect.addEventListener('change', syncProfile);
+    profileCustom.addEventListener('input', () => { profileHidden.value = profileCustom.value; });
+
+    function setProfileValue(value) {
+        // If value exists in the dropdown, select it; otherwise switch to custom
+        const option = [...profileSelect.options].find(o => o.value === value);
+        if (option) {
+            profileSelect.value = value;
+        } else {
+            profileSelect.value = '__custom__';
+            profileCustom.value = value;
+        }
+        syncProfile();
+    }
+
+    (async () => {
+        try {
+            const res = await fetch('/api/consts/aws/profiles/file');
+            const data = await res.json();
+            const profiles = data.profiles || [];
+            profileSelect.innerHTML = '';
+            profiles.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                profileSelect.appendChild(opt);
+            });
+            const customOpt = document.createElement('option');
+            customOpt.value = '__custom__';
+            customOpt.textContent = '— Custom —';
+            profileSelect.appendChild(customOpt);
+        } catch {
+            profileSelect.innerHTML = '<option value="__custom__">— Custom —</option>';
+            profileCustom.style.display = '';
+        }
+        // Set initial value after dropdown is populated
+        if (editData && editData.profile) {
+            setProfileValue(editData.profile);
+        } else {
+            setProfileValue(CONSTS.defaults.profile);
+        }
+    })();
+
     const kubeconfigDefault = getSetting('default_kubeconfig_path') || CONSTS.defaults.kubeconfig_path;
     document.getElementById('ucKubeconfig').value = kubeconfigDefault;
     document.getElementById('ucKubeconfig').placeholder = kubeconfigDefault;
@@ -1653,8 +1860,15 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
     });
     if (editData && editData.local_port) portInput.dispatchEvent(new Event('input'));
 
-    document.getElementById('cancelUcBtn').addEventListener('click', goBackToConnections);
+    document.getElementById('cancelUcBtn').addEventListener('click', () => {
+        if (confirmIfDirty()) goBackToConnections();
+    });
     document.getElementById('saveUcBtn').addEventListener('click', () => saveUserConnection(isEdit ? editKey : null));
+
+    // Track changes on all form inputs
+    clearFormDirty();
+    mainContentBody.querySelectorAll('input, select').forEach(el => el.addEventListener('input', markFormDirty));
+    mainContentBody.querySelectorAll('select').forEach(el => el.addEventListener('change', markFormDirty));
 
     if (!isEdit) {
         document.getElementById('pasteClipboardBtn').addEventListener('click', async () => {
@@ -1697,6 +1911,8 @@ async function saveUserConnection(editKey) {
             return;
         }
         if (data.warnings) data.warnings.forEach(w => showToast(w, 'warning', 5000));
+        clearFormDirty();
+        console.log(`[config] User connection "${connectionName}" ${isEdit ? 'updated' : 'created'}`);
         showToast(`Session "${connectionName}" ${isEdit ? 'updated' : 'created'}`, 'success');
         invalidateCaches();
         setTimeout(goBackToConnections, 600);
@@ -1784,7 +2000,7 @@ async function renderImportForm() {
 }
 
 function detectKind(data) {
-    if (data.cluster && data.region && data.endpoint) return 'connection';
+    if (data.region && data.endpoint && data.type) return 'connection';
     if (data.connection_id && data.bastion_id) return 'user';
     return null;
 }
@@ -1857,6 +2073,9 @@ function fillConnectionForm(data) {
             entries.appendChild(row);
         });
     }
+    // Trigger cluster field visibility based on type
+    const typeEl = document.getElementById('connType');
+    if (typeEl) typeEl.dispatchEvent(new Event('change'));
 }
 
 function fillUserConnectionForm(data, connections) {
@@ -1879,7 +2098,7 @@ function fillUserConnectionForm(data, connections) {
     if (data.connection_name !== undefined) document.getElementById('ucName').value = data.connection_name;
     if (data.description) document.getElementById('ucDescription').value = data.description;
     if (data.local_port) document.getElementById('ucLocalPort').value = data.local_port;
-    if (data.profile) document.getElementById('ucProfile').value = data.profile;
+    // Profile is handled by the async profile combo loader in renderCreateUserConnectionForm
     if (data.kubeconfig_path) document.getElementById('ucKubeconfig').value = data.kubeconfig_path;
     document.getElementById('ucLocalPort').dispatchEvent(new Event('input'));
 }
@@ -2007,6 +2226,7 @@ async function nukePort(port) {
 // === SETTINGS ===
 
 async function renderSettings() {
+    console.log('[settings] Rendering settings page');
     const [html, settings] = await Promise.all([
         fetchPage('settings'),
         fetch('/api/settings').then(r => r.json())
@@ -2068,6 +2288,10 @@ async function renderSettings() {
         grid.appendChild(formGroup);
     }
 
+    // Track changes
+    clearFormDirty();
+    grid.querySelectorAll('input').forEach(input => input.addEventListener('input', markFormDirty));
+
     // Browse buttons
     grid.querySelectorAll('.setting-browse-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -2121,6 +2345,8 @@ async function renderSettings() {
 
         if (res.ok) {
             SETTINGS = await res.json();
+            clearFormDirty();
+            console.log('[settings] Saved:', JSON.stringify(SETTINGS));
             showToast('Settings saved', 'success');
         } else {
             const data = await res.json();
@@ -2267,6 +2493,7 @@ document.getElementById('consoleCopyBtn').addEventListener('click', async () => 
 
 document.getElementById('consoleRefreshBtn').addEventListener('click', async () => {
     if (!activeConsoleKey) return;
+    console.log(`[console] Refreshing logs for ${activeConsoleKey}`);
     const tab = consoleTabs[activeConsoleKey];
     if (!tab) return;
     // Reset counter and re-render from scratch
@@ -2290,6 +2517,7 @@ function formatConsoleLogs(tab) {
 
 document.getElementById('consoleSaveBtn').addEventListener('click', async () => {
     if (!activeConsoleKey) return;
+    console.log(`[save] Saving logs for ${activeConsoleKey}`);
 
     const isSystem = activeConsoleKey === SYSTEM_LOG_KEY;
     const tab = consoleTabs[activeConsoleKey];
@@ -2365,18 +2593,24 @@ document.getElementById('consoleSaveBtn').addEventListener('click', async () => 
 
 async function rehydrateActiveSessions() {
     const activeSessions = sessions.filter(s => s.status === 'active' && s.tunnelId);
+    console.log(`[init] Rehydrating ${activeSessions.length} active session(s)...`);
     for (const session of activeSessions) {
+        console.log(`[init] Rehydrating logs for ${session.key}`);
         ensureConsoleTab(session.key);
         await fetchAndAppendLogs(session.key);
     }
+    console.log('[init] Rehydration complete');
 }
 
 async function init() {
+    console.log('[init] Starting SSM Manager...');
     await Promise.all([loadConsts(), loadSettings()]);
     await fetchSessions();
     renderSidebar();
+    activeConsoleKey = SYSTEM_LOG_KEY;
     switchPane('dashboardPane');
     rehydrateActiveSessions(); // non-blocking: populate logs for active tunnels
+    console.log('[init] SSM Manager ready');
 }
 
 init();
