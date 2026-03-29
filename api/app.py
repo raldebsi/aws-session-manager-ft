@@ -15,7 +15,7 @@ app = create_app()
 
 if __name__ == "__main__":
     app_config = {
-        "host": "0.0.0.0",
+        "host": "127.0.0.1",
         "port": 8000,
         "debug": DEBUG_MODE,
         "use_reloader": False,
@@ -23,8 +23,8 @@ if __name__ == "__main__":
     if DEBUG_MODE:
         app_config.update({
             "debug": True,
-            "host": "0.0.0.0",
+            "host": "0.0.0.0",  # Allow external access in debug mode only
         })
-    
+
     app.run(host=app_config["host"], port=app_config["port"], debug=app_config["debug"], use_reloader=app_config["use_reloader"])
     

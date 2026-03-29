@@ -6,6 +6,12 @@ import yaml
 
 from src.utils.tunnel_manager import SSMTunnelManager
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 tunnel_manager = SSMTunnelManager()
 
 CONFIG_PATH = "config"
