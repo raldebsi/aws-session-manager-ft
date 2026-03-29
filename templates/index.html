@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=960, height=640, initial-scale=1.0">
+    <meta name="viewport" content="width=960, height=800, initial-scale=1.0">
     <title>SSM Manager</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,500,700&display=swap">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -30,6 +30,10 @@
                 <div class="sidebar-pane" id="configPane">
                     <span class="sidebar-icon"><i class="fa-solid fa-network-wired"></i></span>
                     Connections
+                </div>
+                <div class="sidebar-pane" id="logsPane">
+                    <span class="sidebar-icon"><i class="fa-solid fa-scroll"></i></span>
+                    Logs
                 </div>
                 <div class="sidebar-pane" id="advancedPane">
                     <span class="sidebar-icon"><i class="fa-solid fa-flask"></i></span>
@@ -76,7 +80,7 @@
             <div class="main-content-body" id="mainContentBody">
                 <!-- Pane content rendered by JS -->
             </div>
-            <div class="console-panel" id="consolePanel" style="display:none">
+            <div class="console-panel" id="consolePanel">
                 <div class="console-header">
                     <div class="console-tabs" id="consoleTabs"></div>
                     <div class="console-actions">

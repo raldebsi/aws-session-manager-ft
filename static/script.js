@@ -1,3 +1,36 @@
+// === SYSTEM LOG — intercept console early, buffer until console panel is ready ===
+
+const SYSTEM_LOG_KEY = '__system__';
+const _systemLogBuffer = [];
+let _systemLogReady = false;
+
+const _origConsole = {
+    log: console.log.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+};
+
+function _captureConsole(level, args) {
+    const text = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+    const entry = { stream: level === 'error' ? 'stderr' : (level === 'warn' ? 'frontend' : 'stdout'), text: `[${level}] ${text}` };
+    if (_systemLogReady) {
+        const tab = ensureConsoleTab(SYSTEM_LOG_KEY);
+        appendLog(tab, entry);
+        if (activeConsoleKey === SYSTEM_LOG_KEY) refreshConsoleBody();
+    } else {
+        _systemLogBuffer.push(entry);
+    }
+}
+
+console.log = (...args) => { _origConsole.log(...args); _captureConsole('log', args); };
+console.warn = (...args) => { _origConsole.warn(...args); _captureConsole('warn', args); };
+console.error = (...args) => { _origConsole.error(...args); _captureConsole('error', args); };
+
+function syslog(...args) {
+    _origConsole.log(...args);
+    _captureConsole('log', args);
+}
+
 // Sidebar collapse logic
 const sidebar = document.querySelector('.sidebar');
 const hamburgerBtn = document.getElementById('hamburgerBtn');
@@ -112,6 +145,7 @@ const paneRenderers = {
     dashboardPane: renderDashboard,
     configPane: renderConnections,
     advancedPane: renderAdvanced,
+    logsPane: renderLogsPage,
     settingsPane: renderSettings,
 };
 
@@ -727,6 +761,9 @@ function createDashboardCard(session) {
                 <button class="session-btn session-refresh-btn ${checking ? 'spinning' : ''}" title="Refresh health" ${checking ? 'disabled' : ''}>
                     <i class="fa-solid fa-arrows-rotate"></i>
                 </button>
+                <button class="session-btn port-kill-btn" title="Force kill process on port ${session.localPort}">
+                    <i class="fa-solid fa-skull-crossbones"></i>
+                </button>
                 <button class="session-btn session-shutdown ${btnClass}" title="${btnTitle}" ${btnDisabled}>
                     <span class="shutdown-icon">
                         <i class="fa-solid ${btnIcon}"></i>
@@ -736,13 +773,8 @@ function createDashboardCard(session) {
         </div>
         ${conflictWarning}
         <div class="session-bottom">
-            <div class="session-bottom-left">
-                <span class="session-ports">${session.localPort} &rarr; <span class="session-region">${session.region}</span>:${session.remotePort}</span>
-                <div class="session-health">${healthIndicatorsHtml(session)}</div>
-            </div>
-            <button class="port-kill-btn" title="Force kill process on port ${session.localPort}">
-                <i class="fa-solid fa-skull-crossbones"></i>
-            </button>
+            <span class="session-ports">${session.localPort} &rarr; <span class="session-region">${session.region}</span>:${session.remotePort}</span>
+            <div class="session-health">${healthIndicatorsHtml(session)}</div>
         </div>
     `;
 
@@ -778,6 +810,193 @@ function createDashboardCard(session) {
     return el;
 }
 
+// === FULL-SCREEN LOGS PAGE ===
+
+let logsPageActiveKey = null;
+
+async function renderLogsPage() {
+    mainContentBody.innerHTML = '';
+
+    const container = document.createElement('div');
+    container.className = 'logs-page';
+
+    // Tabs bar — all tunnels that have logs + System
+    const tabsBar = document.createElement('div');
+    tabsBar.className = 'logs-page-tabs';
+
+    // Gather keys that have backend logs
+    const tunnelKeys = [];
+    for (const s of sessions) {
+        try {
+            const res = await fetch(`/api/tunnels/${s.tunnelId || s.key}/logs`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.logs && data.logs.length > 0) {
+                    tunnelKeys.push({ key: s.key, name: s.name, ci: data.connection_index, logs: data.logs });
+                }
+            }
+        } catch {}
+    }
+
+    // System tab always first
+    const allTabs = [{ key: SYSTEM_LOG_KEY, name: 'System', ci: null, logs: null }, ...tunnelKeys];
+    if (!logsPageActiveKey || !allTabs.find(t => t.key === logsPageActiveKey)) {
+        logsPageActiveKey = allTabs.length > 1 ? allTabs[1].key : SYSTEM_LOG_KEY;
+    }
+
+    allTabs.forEach(t => {
+        const btn = document.createElement('button');
+        btn.className = `logs-page-tab${t.key === logsPageActiveKey ? ' active' : ''}`;
+        btn.textContent = t.name;
+        btn.addEventListener('click', () => {
+            logsPageActiveKey = t.key;
+            refreshLogsPageBody(container, allTabs);
+        });
+        tabsBar.appendChild(btn);
+    });
+
+    // Action buttons
+    const actionsBar = document.createElement('div');
+    actionsBar.className = 'logs-page-actions';
+    actionsBar.innerHTML = `
+        <button class="conn-action-btn logs-page-copy-btn" title="Copy logs"><i class="fa-solid fa-copy"></i></button>
+        <button class="conn-action-btn logs-page-save-btn" title="Save logs"><i class="fa-solid fa-floppy-disk"></i></button>
+    `;
+    tabsBar.appendChild(actionsBar);
+
+    container.appendChild(tabsBar);
+
+    const body = document.createElement('div');
+    body.className = 'logs-page-body';
+    container.appendChild(body);
+    mainContentBody.appendChild(container);
+
+    // Copy button
+    actionsBar.querySelector('.logs-page-copy-btn').addEventListener('click', async () => {
+        const bodyEl = container.querySelector('.logs-page-body');
+        if (!bodyEl) return;
+        const text = bodyEl.innerText;
+        if (!text.trim()) { showToast('Nothing to copy', 'warning'); return; }
+        try { await writeClipboard(text); showToast('Logs copied', 'success'); }
+        catch { showToast('Failed to copy', 'error'); }
+    });
+
+    // Save button
+    actionsBar.querySelector('.logs-page-save-btn').addEventListener('click', async () => {
+        const activeTab = allTabs.find(t => t.key === logsPageActiveKey);
+        if (!activeTab) return;
+
+        try {
+            if (activeTab.key === SYSTEM_LOG_KEY) {
+                const tab = consoleTabs[SYSTEM_LOG_KEY];
+                if (!tab || !tab.logs.length) { showToast('No logs to save', 'warning'); return; }
+                const res = await fetch('/api/consts/browse-folder', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'cancelled') return;
+                if (!data.folder) { showToast(data.error || 'Failed', 'error'); return; }
+                const prefix = `system_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+                await fetch('/api/consts/save-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: data.folder, filename: `${prefix}.log`, content: formatConsoleLogs(tab) }),
+                });
+                showToast(`Saved in ${data.folder}`, 'success');
+            } else {
+                const tunnelId = activeTab.key;
+                const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'cancelled') return;
+                if (data.status === 'saved') {
+                    showToast(`Saved in ${data.folder} (${data.prefix})`, 'success');
+                } else {
+                    // Tunnel not found — fall back to folder picker for client logs
+                    const cTab = consoleTabs[activeTab.key];
+                    if (!cTab || !cTab.logs.length) { showToast('No logs to save', 'warning'); return; }
+                    const folderRes = await fetch('/api/consts/browse-folder', { method: 'POST' });
+                    const folderData = await folderRes.json();
+                    if (folderData.status === 'cancelled') return;
+                    if (!folderData.folder) { showToast(folderData.error || 'Failed', 'error'); return; }
+                    const prefix = `${activeTab.key}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+                    await fetch('/api/consts/save-file', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ folder: folderData.folder, filename: `${prefix}_client.log`, content: formatConsoleLogs(cTab) }),
+                    });
+                    showToast(`Saved in ${folderData.folder} (${prefix})`, 'success');
+                }
+            }
+        } catch (err) { showToast(err.message, 'error'); }
+    });
+
+    refreshLogsPageBody(container, allTabs);
+}
+
+function refreshLogsPageBody(container, allTabs) {
+    // Update tab active states
+    container.querySelectorAll('.logs-page-tab').forEach((btn, i) => {
+        btn.classList.toggle('active', allTabs[i].key === logsPageActiveKey);
+    });
+
+    const body = container.querySelector('.logs-page-body');
+    body.innerHTML = '';
+
+    const activeTab = allTabs.find(t => t.key === logsPageActiveKey);
+    if (!activeTab) return;
+
+    let entries;
+    if (activeTab.key === SYSTEM_LOG_KEY) {
+        const tab = consoleTabs[SYSTEM_LOG_KEY];
+        entries = (tab ? tab.logs : []).map(e => ({ ts: null, ci: null, type: e.stream, text: e.text }));
+    } else {
+        entries = activeTab.logs || [];
+    }
+
+    if (entries.length === 0) {
+        body.innerHTML = '<div class="logs-page-empty">No logs</div>';
+        return;
+    }
+
+    const LOGS_TYPE_PREFIXES = {
+        stdout:   '[tunnel] ',
+        stderr:   '[error]  ',
+        frontend: '[client] ',
+        system:   '[system] ',
+    };
+
+    entries.forEach(entry => {
+        const line = document.createElement('div');
+        line.className = `console-line ${entry.type}`;
+
+        // Timestamp
+        const tsSpan = document.createElement('span');
+        tsSpan.className = 'logs-page-ts';
+        if (entry.ts) {
+            const d = new Date(entry.ts * 1000);
+            tsSpan.textContent = d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 }) + ' ';
+        }
+        line.appendChild(tsSpan);
+
+        // Connection index
+        if (entry.ci != null) {
+            const ciSpan = document.createElement('span');
+            ciSpan.className = 'logs-page-ci';
+            ciSpan.textContent = `#${entry.ci} `;
+            line.appendChild(ciSpan);
+        }
+
+        // Prefix + text
+        const prefix = document.createElement('span');
+        prefix.className = 'console-prefix';
+        prefix.textContent = LOGS_TYPE_PREFIXES[entry.type] || '';
+        line.appendChild(prefix);
+        line.appendChild(document.createTextNode(entry.text));
+
+        body.appendChild(line);
+    });
+
+    body.scrollTop = body.scrollHeight;
+}
+
 // === CONSOLE PANEL ===
 
 // Each tab: { open, logs: [{stream, text}], _lastLogCount }
@@ -790,6 +1009,14 @@ function ensureConsoleTab(key) {
     }
     return consoleTabs[key];
 }
+
+// Flush buffered system logs now that ensureConsoleTab/appendLog are available
+(() => {
+    const tab = ensureConsoleTab(SYSTEM_LOG_KEY);
+    _systemLogBuffer.forEach(entry => tab.logs.push(entry));
+    _systemLogBuffer.length = 0;
+    _systemLogReady = true;
+})();
 
 function appendLog(tab, entry) {
     tab.logs.push(entry);
@@ -836,11 +1063,12 @@ function openConsoleTab(key) {
 }
 
 function closeConsoleTab(key) {
+    if (key === SYSTEM_LOG_KEY) return; // System tab is non-dismissable
     if (consoleTabs[key]) {
         consoleTabs[key].open = false;
     }
     if (activeConsoleKey === key) {
-        const openKeys = Object.keys(consoleTabs).filter(k => consoleTabs[k].open);
+        const openKeys = Object.keys(consoleTabs).filter(k => consoleTabs[k].open || k === SYSTEM_LOG_KEY);
         activeConsoleKey = openKeys.length > 0 ? openKeys[openKeys.length - 1] : null;
     }
     renderConsoleTabs();
@@ -850,8 +1078,8 @@ function closeConsoleTab(key) {
 function updateConsolePanelVisibility() {
     const panel = document.getElementById('consolePanel');
     if (!panel) return;
-    const hasOpenTabs = Object.values(consoleTabs).some(t => t.open);
-    panel.style.display = hasOpenTabs ? '' : 'none';
+    // Always visible — System tab is always present
+    panel.style.display = '';
 }
 
 function renderConsoleTabs() {
@@ -859,7 +1087,20 @@ function renderConsoleTabs() {
     if (!tabsEl) return;
     tabsEl.innerHTML = '';
 
+    // System tab is always first and non-dismissable
+    ensureConsoleTab(SYSTEM_LOG_KEY);
+    const sysEl = document.createElement('button');
+    sysEl.className = `console-tab console-tab-system${SYSTEM_LOG_KEY === activeConsoleKey ? ' active' : ''}`;
+    sysEl.innerHTML = `<span class="console-tab-dot system-dot"></span>System`;
+    sysEl.addEventListener('click', () => {
+        activeConsoleKey = SYSTEM_LOG_KEY;
+        renderConsoleTabs();
+        refreshConsoleBody();
+    });
+    tabsEl.appendChild(sysEl);
+
     for (const [key, tab] of Object.entries(consoleTabs)) {
+        if (key === SYSTEM_LOG_KEY) continue; // already rendered above
         if (!tab.open) continue;
         const session = sessions.find(s => s.key === key);
         const name = session ? session.name : key;
@@ -2038,41 +2279,83 @@ document.getElementById('consoleRefreshBtn').addEventListener('click', async () 
     showToast('Logs refreshed', 'info');
 });
 
+function formatConsoleLogs(tab) {
+    return tab.logs.map(entry => {
+        const d = new Date();
+        const ts = d.toISOString().replace('T', ' ').replace('Z', '').slice(0, -1);
+        const prefix = STREAM_PREFIXES[entry.stream] || '';
+        return `[${ts}] ${prefix.trim()} ${entry.text}`;
+    }).join('\n');
+}
+
 document.getElementById('consoleSaveBtn').addEventListener('click', async () => {
     if (!activeConsoleKey) return;
-    const session = sessions.find(s => s.key === activeConsoleKey);
-    const tunnelId = session?.tunnelId || activeConsoleKey;
-    try {
-        // Step 1: Save backend (system) logs — opens folder picker, returns folder + prefix
-        const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'cancelled') return;
-        if (data.status !== 'saved') {
-            showToast(data.error || 'Failed to save', 'error');
-            return;
-        }
 
-        // Step 2: Save client logs to the same folder
-        const tab = consoleTabs[activeConsoleKey];
-        if (tab && tab.logs.length) {
-            const clientLines = tab.logs.map(entry => {
-                const d = new Date();
-                const ts = d.toISOString().replace('T', ' ').replace('Z', '').slice(0, -1);
-                const prefix = STREAM_PREFIXES[entry.stream] || '';
-                return `[${ts}] ${prefix.trim()} ${entry.text}`;
-            });
-            await fetch('/api/tunnels/save-file', {
+    const isSystem = activeConsoleKey === SYSTEM_LOG_KEY;
+    const tab = consoleTabs[activeConsoleKey];
+
+    try {
+        if (isSystem) {
+            // System tab — no tunnel, just save client logs via folder picker
+            if (!tab || !tab.logs.length) {
+                showToast('No logs to save', 'warning');
+                return;
+            }
+            const res = await fetch('/api/consts/browse-folder', { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'cancelled') return;
+            if (!data.folder) {
+                showToast(data.error || 'Failed to pick folder', 'error');
+                return;
+            }
+            const prefix = `system_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+            await fetch('/api/consts/save-file', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     folder: data.folder,
-                    filename: `${data.prefix}_client.log`,
-                    content: clientLines.join('\n'),
+                    filename: `${prefix}.log`,
+                    content: formatConsoleLogs(tab),
                 }),
             });
-        }
+            showToast(`Saved in ${data.folder}`, 'success');
+        } else {
+            // Tunnel tab — try saving backend logs first, fall back to folder picker if tunnel not found
+            const session = sessions.find(s => s.key === activeConsoleKey);
+            const tunnelId = session?.tunnelId || activeConsoleKey;
+            let folder, prefix;
 
-        showToast(`Saved in ${data.folder} (${data.prefix})`, 'success');
+            const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'cancelled') return;
+            if (data.status === 'saved') {
+                folder = data.folder;
+                prefix = data.prefix;
+            } else {
+                // Tunnel not found or no backend logs — pick folder for client logs only
+                const folderRes = await fetch('/api/consts/browse-folder', { method: 'POST' });
+                const folderData = await folderRes.json();
+                if (folderData.status === 'cancelled') return;
+                if (!folderData.folder) { showToast(folderData.error || 'Failed', 'error'); return; }
+                folder = folderData.folder;
+                prefix = `${activeConsoleKey}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+            }
+
+            // Save client logs
+            if (tab && tab.logs.length) {
+                await fetch('/api/consts/save-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        folder: folder,
+                        filename: `${prefix}_client.log`,
+                        content: formatConsoleLogs(tab),
+                    }),
+                });
+            }
+
+            showToast(`Saved in ${folder} (${prefix})`, 'success');
+        }
     } catch (err) {
         showToast(err.message, 'error');
     }

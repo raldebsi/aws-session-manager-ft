@@ -116,16 +116,16 @@ def pid_kill(pid):
 def browse_save():
     """Open a native save-as dialog. User picks a folder and names the file.
 
-    Body: {"initial_dir": "~", "default_name": "config", "filetypes": [["YAML", "*.yaml"]]}
+    Body: {"initial_dir": ".", "default_name": "config", "filetypes": [["YAML", "*.yaml"]]}
     """
     data = request.get_json() or {}
-    initial_dir = data.get("initial_dir", "~")
+    initial_dir = data.get("initial_dir", ".")
     default_name = data.get("default_name", "config")
 
     import os
-    initial_dir = os.path.expanduser(initial_dir)
+    initial_dir = os.path.abspath(os.path.expanduser(initial_dir))
     if not os.path.isdir(initial_dir):
-        initial_dir = os.path.expanduser("~")
+        initial_dir = os.getcwd()
 
     filetypes = data.get("filetypes", [["All files", "*.*"]])
 
@@ -142,5 +142,56 @@ def browse_save():
         )
         root.destroy()
         return jsonify({"path": path if path else None})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@consts_bp.route("/browse-folder", methods=["POST"])
+def browse_folder():
+    """Open a native folder picker dialog and return the selected path.
+
+    Body (optional): {"initial_dir": ".", "title": "Select folder"}
+    """
+    data = request.get_json(silent=True) or {}
+    title = data.get("title", "Select folder")
+    initial_dir = data.get("initial_dir", ".")
+
+    import os
+    initial_dir = os.path.abspath(os.path.expanduser(initial_dir))
+    if not os.path.isdir(initial_dir):
+        initial_dir = os.getcwd()
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        folder = filedialog.askdirectory(title=title, initialdir=initial_dir)
+        root.destroy()
+        if folder:
+            return jsonify({"status": "ok", "folder": folder})
+        return jsonify({"status": "cancelled"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@consts_bp.route("/save-file", methods=["POST"])
+def save_file():
+    """Write content to folder/filename. Body: {folder, filename, content}."""
+    import os
+    data = request.get_json(force=True)
+    folder = data.get("folder")
+    filename = data.get("filename")
+    content = data.get("content")
+
+    if not folder or not filename or content is None:
+        return jsonify({"error": "Required: folder, filename, content"}), 400
+
+    filepath = os.path.join(folder, filename)
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return jsonify({"status": "saved", "path": filepath})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

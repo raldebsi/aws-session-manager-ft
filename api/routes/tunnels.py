@@ -157,8 +157,10 @@ def save_tunnel_logs(tunnel_id):
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
+            import os
             folder = filedialog.askdirectory(
                 title=f"Select folder to save logs — {tunnel_id}",
+                initialdir=os.getcwd(),
             )
             root.destroy()
             if folder:
@@ -185,23 +187,3 @@ def save_tunnel_logs(tunnel_id):
     return jsonify({"status": "saved", "folder": result["folder"], "prefix": result["prefix"]})
 
 
-@tunnels_bp.route("/save-file", methods=["POST"])
-def save_file():
-    """Generic file save: write content to folder/filename. Body: {folder, filename, content}."""
-    import os
-    data = request.get_json(force=True)
-    folder = data.get("folder")
-    filename = data.get("filename")
-    content = data.get("content")
-
-    if not folder or not filename or content is None:
-        return jsonify({"error": "Required: folder, filename, content"}), 400
-
-    filepath = os.path.join(folder, filename)
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
-        return jsonify({"status": "saved", "path": filepath})
-    except Exception as e:
-        logger.error(f"Failed to save file {filepath}: {e}")
-        return jsonify({"error": str(e)}), 500
