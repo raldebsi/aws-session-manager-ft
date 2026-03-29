@@ -1,8 +1,7 @@
 from enum import Enum
 import signal
 import threading
-from typing import Literal, Optional, TypedDict, Union
-from uuid import uuid4
+from typing import Optional, TypedDict, Union
 from src.utils.managed_process import ManagedProcess
 import logging
 
@@ -19,10 +18,12 @@ class TunnelState(Enum):
     ERROR = "error"
 
 class Tunnel(TypedDict):
-    thread: threading.Thread
+    thread: Optional[threading.Thread]
     connection_id: str
     process: Optional[ManagedProcess]
     state: TunnelState
+    stdout: list
+    stderr: list
 
 class SSMTunnelManager:
     """
@@ -49,10 +50,34 @@ class SSMTunnelManager:
             else:
                 logger.warning(f"[{tunnel_id}] Attempted to update state for non-existent tunnel.")
 
+    def _cleanup_dead_tunnel(self, tunnel_id):
+        """Ensure old thread and process are fully dead before reuse. Must be called with lock held."""
+        tunnel = self.tunnels.get(tunnel_id)
+        if not tunnel:
+            return
+
+        thread = tunnel.get('thread')
+
+        # Give the thread time to finish (process was already killed via kill_tunnel)
+        if thread and thread.is_alive():
+            logger.info(f"[{tunnel_id}] Waiting for old thread to exit...")
+            thread.join(timeout=3)
+            if thread.is_alive():
+                # Python has no Thread.kill(). It's a daemon thread so it won't
+                # block app exit — proceed with reuse regardless.
+                logger.warning(f"[{tunnel_id}] Old thread did not exit. Abandoning (daemon).")
+
+        tunnel['process'] = None
+        tunnel['thread'] = None
+
     def start_tunnel(self, connection_id, *cmd):
-        def tunnel_thread(): # Define new function internally to utilize local variables
+        tunnel_id = connection_id
+
+        def tunnel_thread():
+            stdout_log = self.tunnels[tunnel_id]['stdout']
+            stderr_log = self.tunnels[tunnel_id]['stderr']
             try:
-                with ManagedProcess(cmd) as mp:
+                with ManagedProcess(cmd, output=stdout_log, errors=stderr_log) as mp:
                     logger.info(f"[{tunnel_id}] Tunnel process started with PID {mp.pid}")
                     self.register_process(tunnel_id, mp)
 
@@ -82,28 +107,45 @@ class SSMTunnelManager:
                 logger.error(f"[{tunnel_id}] Tunnel error: {e}")
             finally:
                 with self._lock:
-                    self.update_tunnel_state(tunnel_id, 'stopped-shutdown' if self._shutdown_flag.is_set() else 'stopped-ended')
+                    current_state = self.tunnels.get(tunnel_id, {}).get('state')
+                    if current_state != TunnelState.KILLED:
+                        self.update_tunnel_state(tunnel_id, 'stopped-shutdown' if self._shutdown_flag.is_set() else 'stopped-ended')
 
-        if self.has_tunnel_for_connection(connection_id):
-            logger.warning(f"Tunnel already exists for connection_id {connection_id}. Cannot start another.")
-            # TODO: Consider, return None or return existing connection?
-            return ""
-
-        thread = threading.Thread(target=tunnel_thread, daemon=True)
-        tunnel_suffix = thread.ident if thread.ident else uuid4().hex[:8] # Flask disables ident in threads
-        tunnel_id = f"{connection_id}-{tunnel_suffix}" # Prevent ID collision even though it must not happen, since only one tunnel per connection_id is allowed, but if somehow the code allows for it, we need to allow killing the correct tunnel
         with self._lock:
-            self.tunnels[tunnel_id] = {'thread': thread, 'connection_id': connection_id, 'process': None, 'state': TunnelState.STARTING}
-        thread.start()
+            existing = self.tunnels.get(tunnel_id)
+            if existing:
+                state = existing.get('state')
+                if state in (TunnelState.STARTING, TunnelState.RUNNING):
+                    logger.warning(f"[{tunnel_id}] Tunnel is already active. Cannot start another.")
+                    return ""
+                # Dead tunnel exists — clean up and reuse
+                logger.info(f"[{tunnel_id}] Reusing dead tunnel entry (previous state: {state}).")
+                self._cleanup_dead_tunnel(tunnel_id)
+                existing['stdout'].append("--- Reconnected ---")
+                existing['state'] = TunnelState.STARTING
+                existing['thread'] = threading.Thread(target=tunnel_thread, daemon=True)
+                existing['thread'].start()
+            else:
+                thread = threading.Thread(target=tunnel_thread, daemon=True)
+                self.tunnels[tunnel_id] = {
+                    'thread': thread,
+                    'connection_id': connection_id,
+                    'process': None,
+                    'state': TunnelState.STARTING,
+                    'stdout': [],
+                    'stderr': [],
+                }
+                thread.start()
+
         return tunnel_id
 
     def has_tunnel_for_connection(self, connection_id):
-        """Return True if a tunnel exists for the given connection_id."""
+        """Return True if an active tunnel exists for the given connection_id."""
         with self._lock:
-            return any(
-                t.get('connection_id') == connection_id and t.get('state') in [TunnelState.STARTING, TunnelState.RUNNING]
-                for t in self.tunnels.values()
-            )
+            tunnel = self.tunnels.get(connection_id)
+            if not tunnel:
+                return False
+            return tunnel.get('state') in (TunnelState.STARTING, TunnelState.RUNNING)
 
     def stop_tunnel(self, tunnel_id):
         with self._lock:
@@ -229,15 +271,11 @@ class SSMTunnelManager:
             if not tunnel:
                 logger.warning(f"[{tunnel_id}] Attempted to get output stream for non-existent tunnel.")
                 return None
-            process = tunnel.get('process')
-            if not process:
-                logger.warning(f"[{tunnel_id}] No process registered for tunnel when getting output stream.")
-                return None
-            
+
             if stream_name == 'stdout':
-                return process.output
+                return tunnel.get('stdout', [])
             elif stream_name == 'stderr':
-                return process.errors
+                return tunnel.get('stderr', [])
             else:
                 logger.error(f"[{tunnel_id}] Invalid stream name '{stream_name}' requested.")
                 return None

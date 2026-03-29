@@ -901,6 +901,49 @@ hr {
     color: #7b8794;
 }
 
+/* Port conflict: external process occupying the port */
+.session-item.port-conflict {
+    background: #2a2520;
+    border-color: #6b5a30;
+    opacity: 0.75;
+}
+.session-item.port-conflict .session-name,
+.session-item.port-conflict .session-subtext,
+.session-item.port-conflict .session-type-badge,
+.session-item.port-conflict .session-ports {
+    color: #9a8a6a;
+}
+.session-shutdown.conflict {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+.session-shutdown.conflict .fa-triangle-exclamation {
+    color: var(--warning);
+}
+.session-conflict-warning {
+    font-size: 0.75rem;
+    color: var(--warning);
+    padding: 0.25rem 0.75rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+/* Sidebar port conflict */
+.sidebar-session-item.port-conflict {
+    opacity: 0.65;
+}
+.sidebar-session-item.port-conflict .sidebar-session-name {
+    color: #9a8a6a;
+}
+.sidebar-power-btn.conflict {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+    color: var(--warning);
+}
+
 .shutdown-icon svg {
     display: block;
 }

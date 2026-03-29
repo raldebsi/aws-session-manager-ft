@@ -154,8 +154,17 @@ function isBusy(session) {
     return session.status === 'starting' || session.status === 'stopping';
 }
 
+function isPortConflict(session) {
+    return session.status === 'port_conflict';
+}
+
 async function toggleSession(session) {
     if (tunnelBusy) return;
+
+    if (isPortConflict(session)) {
+        showToast(`Port ${session.localPort} is in use by another process (PID ${session.portPid}). Use the kill button to free it.`, 'warning');
+        return;
+    }
 
     if (!isActive(session)) {
         // Check max tunnels before connecting
@@ -408,13 +417,6 @@ async function fetchAndAppendLogs(key) {
         if (!tab._lastStdout) tab._lastStdout = 0;
         if (!tab._lastStderr) tab._lastStderr = 0;
 
-        // Reset counters if tunnel changed (reconnect)
-        if (tab._tunnelId && tab._tunnelId !== tunnelId) {
-            tab._lastStdout = 0;
-            tab._lastStderr = 0;
-        }
-        tab._tunnelId = tunnelId;
-
         const [stdoutRes, stderrRes] = await Promise.all([
             fetch(`/api/tunnels/${tunnelId}/output`),
             fetch(`/api/tunnels/${tunnelId}/errors`),
@@ -599,11 +601,13 @@ function renderFlatView(container, filtered) {
 function sessionIcon(session) {
     if (session.status === 'starting') return 'fa-spinner fa-spin';
     if (session.status === 'stopping') return 'fa-spinner fa-spin';
+    if (session.status === 'port_conflict') return 'fa-triangle-exclamation';
     return 'fa-power-off';
 }
 
 function sessionBtnClass(session) {
     if (session.status === 'active' || session.status === 'stopping') return 'on';
+    if (session.status === 'port_conflict') return 'conflict';
     return 'off';
 }
 
@@ -615,11 +619,19 @@ function createDashboardCard(session) {
     if (session.status === 'error') el.classList.add('error');
     if (session.status === 'starting') el.classList.add('starting');
     if (session.status === 'stopping') el.classList.add('stopping');
+    if (isPortConflict(session)) el.classList.add('port-conflict');
     if (tunnelBusy && !isBusy(session)) el.classList.add('tunnel-lock');
 
     const btnClass = sessionBtnClass(session);
     const btnIcon = sessionIcon(session);
     const isOn = btnClass === 'on';
+    const isConflict = isPortConflict(session);
+
+    const btnTitle = isConflict ? `Port ${session.localPort} in use by PID ${session.portPid}` : (isOn ? 'Disconnect' : 'Connect');
+    const btnDisabled = isConflict ? 'disabled' : '';
+    const conflictWarning = isConflict
+        ? `<div class="session-conflict-warning"><i class="fa-solid fa-triangle-exclamation"></i> Port in use by external process (PID ${session.portPid})</div>`
+        : '';
 
     el.innerHTML = `
         <div class="session-top">
@@ -632,12 +644,13 @@ function createDashboardCard(session) {
                     <span class="session-type-badge">${session.type}</span>
                 </div>
             </div>
-            <button class="session-btn session-shutdown ${btnClass}" title="${isOn ? 'Disconnect' : 'Connect'}">
+            <button class="session-btn session-shutdown ${btnClass}" title="${btnTitle}" ${btnDisabled}>
                 <span class="shutdown-icon">
                     <i class="fa-solid ${btnIcon}"></i>
                 </span>
             </button>
         </div>
+        ${conflictWarning}
         <div class="session-bottom">
             <span class="session-ports">${session.localPort} &rarr; <span class="session-region">${session.region}</span>:${session.remotePort}</span>
             <button class="port-kill-btn" title="Force kill process on port ${session.localPort}">
@@ -1802,10 +1815,13 @@ function createSidebarItem(session) {
     if (session.status === 'error') el.classList.add('error');
     if (session.status === 'starting') el.classList.add('starting');
     if (session.status === 'stopping') el.classList.add('stopping');
+    if (isPortConflict(session)) el.classList.add('port-conflict');
 
     const isOn = isActive(session) || session.status === 'stopping';
-    const btnIcon = isBusy(session) ? 'fa-spinner fa-spin' : 'fa-power-off';
-    const btnClass = isOn ? 'on' : 'off';
+    const conflict = isPortConflict(session);
+    const btnIcon = isBusy(session) ? 'fa-spinner fa-spin' : (conflict ? 'fa-triangle-exclamation' : 'fa-power-off');
+    const btnClass = isOn ? 'on' : (conflict ? 'conflict' : 'off');
+    const btnDisabled = conflict ? 'disabled' : '';
 
     el.innerHTML = `
         <div class="sidebar-session-top">
@@ -1814,7 +1830,7 @@ function createSidebarItem(session) {
                 <button class="sidebar-action-btn sidebar-nuke-btn" title="Force kill port ${session.localPort}">
                     <i class="fa-solid fa-skull-crossbones"></i>
                 </button>
-                <button class="sidebar-action-btn sidebar-power-btn ${btnClass}" title="${isOn ? 'Disconnect' : 'Connect'}">
+                <button class="sidebar-action-btn sidebar-power-btn ${btnClass}" title="${conflict ? `Port in use (PID ${session.portPid})` : (isOn ? 'Disconnect' : 'Connect')}" ${btnDisabled}>
                     <i class="fa-solid ${btnIcon}"></i>
                 </button>
             </div>

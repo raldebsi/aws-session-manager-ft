@@ -10,11 +10,11 @@ import psutil
 logger = logging.getLogger("managed_process")
 
 class ManagedProcess:
-    def __init__(self, cmd, output_limit=1000):
+    def __init__(self, cmd, output_limit=1000, output=None, errors=None):
         self.cmd = cmd
         self.process = None
-        self.output = []
-        self.errors = []
+        self.output = output if output is not None else []
+        self.errors = errors if errors is not None else []
         self.output_limit = output_limit
 
     def __enter__(self):
