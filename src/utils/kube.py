@@ -1,18 +1,31 @@
-import os
 import logging
 import yaml
 
 from typing import Optional
 
 from src.common import tunnel_manager
-from src.utils.utils import get_is_client_privileged, logger, run_cmd, update_hosts
+from src.utils.utils import get_is_client_privileged, logger, resolve_absolute_path, run_cmd, update_hosts
 
 cmd_logger = logging.getLogger("cmd_logger")
+
+
+def _add_optional_args(**kwargs) -> list:
+    """Build optional CLI args from kwargs. Each becomes --key value. Skips falsy values."""
+    args = []
+    for key, value in kwargs.items():
+        if not value:
+            continue
+        if key in ["kubeconfig_path", "kubeconfig"]:
+            value = resolve_absolute_path(value)
+            key = "kubeconfig"
+        args += [f"--{key.replace('_', '-').replace(' ', '-')}", str(value)]
+    return args
+
 
 def update_kube_cluster_config(config_path, local_server, local_port, cluster_alias: Optional[str] = None):
     """Modify the kubeconfig file to replace the endpoint port with the local port."""
     # Name is optional, when provided it will select only matching name
-    config_path = os.path.abspath(os.path.expanduser(config_path))
+    config_path = resolve_absolute_path(config_path)
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -108,7 +121,7 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
     if not edit_indices:
         logger.error("No matching clusters found or all clusters are edited")
         return False
-    
+
     next_idx = edit_indices[0]
     cluster_info = cluster_table[next_idx]
     cluster = config["clusters"][next_idx]
@@ -135,7 +148,7 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
 
     return True
 
-def setup_kubeconfig(profile, cluster_name, region, context_alias = None):
+def setup_kubeconfig(profile, cluster_name, region, context_alias=None, kubeconfig_path=None):
     logger.info(f"Updating kubeconfig for {cluster_name} in {region} as {profile}")
     cmd = [
         "aws", "eks", "update-kubeconfig",
@@ -143,8 +156,7 @@ def setup_kubeconfig(profile, cluster_name, region, context_alias = None):
         "--region", region,
         "--profile", profile,
     ]
-    if context_alias:
-        cmd += ["--alias", context_alias]
+    cmd += _add_optional_args(kubeconfig_path=kubeconfig_path, alias=context_alias)
 
     process = run_cmd(cmd)
 
@@ -161,17 +173,18 @@ def setup_kubeconfig(profile, cluster_name, region, context_alias = None):
         logger.error(f"Error updating kubeconfig for {cluster_name}. Return code: {return_code}.\nOutput: {output}.\nError Output: {error_output}")
         return return_code == 0
 
-    active_context = get_k8s_current_context()
+    active_context = get_k8s_current_context(kubeconfig_path=kubeconfig_path)
     if active_context:
         logger.info(f"Active Kubernetes context after update: {active_context}")
     else:
         logger.warning("Could not determine active Kubernetes context after update.")
-    
+
     return return_code == 0
 
-def get_k8s_current_context():
+def get_k8s_current_context(kubeconfig_path=None):
     """Get the current Kubernetes context using kubectl."""
-    process = run_cmd(["kubectl", "config", "current-context"])
+    cmd = ["kubectl", "config", "current-context"] + _add_optional_args(kubeconfig_path=kubeconfig_path)
+    process = run_cmd(cmd)
     output = process.stdout.read().strip() if process.stdout else ""
     if not output:
         logger.error(process.stderr.read() if process.stderr else "No output from kubectl current-context")
@@ -180,28 +193,26 @@ def get_k8s_current_context():
     process.wait()
     return context
 
-def k8s_health_check(context=None):
-    """Check if Kubernetes cluster is reachable by getting the nodes."""
+def k8s_health_check(context=None, kubeconfig_path=None):
+    """Check if Kubernetes cluster is reachable by getting the healthz endpoint."""
     cmd = ["kubectl", "get", "--raw", "/healthz"]
-    if context:
-        cmd.extend(["--context", context])
+    cmd += _add_optional_args(context=context, kubeconfig_path=kubeconfig_path)
     process = run_cmd(cmd)
     output = process.stdout.read().strip() if process.stdout else ""
     if not output:
         logger.error(process.stderr.read() if process.stderr else "No output from kubectl health check")
         return False
-    
+
     process.wait()
-    print(f"Kubernetes health check output: {output}")
+    logger.info(f"Kubernetes health check output: {output}")
     return output == "ok"
 
 
-def get_k8s_nodes(context=None):
+def get_k8s_nodes(context=None, kubeconfig_path=None):
     """Get the list of Kubernetes nodes using kubectl."""
     cmd = ["kubectl", "get", "nodes", "-o", "name"]
 
-    if context:
-        cmd.extend(["--context", context])
+    cmd += _add_optional_args(context=context, kubeconfig_path=kubeconfig_path)
 
     process = run_cmd(cmd)
 
@@ -229,7 +240,7 @@ def start_eks_tunnel(
         logger.warning(f"Tunnel already exists for connection_id {tunnel_connection_id}. Cannot start another.")
         return ""
 
-    if not setup_kubeconfig(profile, cluster_name, region, context_alias=tunnel_connection_id):
+    if not setup_kubeconfig(profile, cluster_name, region, context_alias=tunnel_connection_id, kubeconfig_path=kubeconfig_path):
         logger.error(f"Failed to update kubeconfig for {cluster_name}. Aborting tunnel setup.")
         return None
 
@@ -276,7 +287,7 @@ def start_ssm_tunnel(
     if tunnel_manager.has_tunnel_for_connection(tunnel_connection_id):
         logger.warning(f"Tunnel already exists for connection_id {tunnel_connection_id}. Cannot start another.")
         return ""
-    
+
     cmd = [
         "aws",
         "ssm",

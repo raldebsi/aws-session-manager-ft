@@ -31,6 +31,10 @@
                     <span class="sidebar-icon"><i class="fa-solid fa-network-wired"></i></span>
                     Connections
                 </div>
+                <div class="sidebar-pane" id="advancedPane">
+                    <span class="sidebar-icon"><i class="fa-solid fa-flask"></i></span>
+                    Advanced
+                </div>
                 <div class="sidebar-pane" id="settingsPane">
                     <span class="sidebar-icon"><i class="fa-solid fa-gear"></i></span>
                     Settings
@@ -69,16 +73,21 @@
             <div class="main-content-body" id="mainContentBody">
                 <!-- Pane content rendered by JS -->
             </div>
+            <div class="console-panel" id="consolePanel" style="display:none">
+                <div class="console-header">
+                    <div class="console-tabs" id="consoleTabs"></div>
+                    <button class="conn-action-btn" id="consoleCopyBtn" title="Copy logs"><i class="fa-solid fa-copy"></i></button>
+                </div>
+                <div class="console-body" id="consoleBody">
+                    <div class="console-empty">No session selected</div>
+                </div>
+            </div>
         </main>
     </div>
 
     <script>
-        // Session data
-        const sessions = [
-            { id: 1, name: 'Test 9444', type: 'EKS', description: 'Dev UAT Mumbai', localPort: 9444, region: 'ap-south-1', remotePort: 443, status: 'active', connectionId: 'ai-devuat-mumbai' },
-            { id: 2, name: 'Test 9443', type: 'EKS', description: 'Dev UAT Mumbai', localPort: 9443, region: 'ap-south-1', remotePort: 443, status: 'error', connectionId: 'ai-devuat-mumbai' },
-            { id: 3, name: 'Session Gamma', type: 'RDS', description: 'Dev UAT Mumbai', localPort: 3000, region: 'ap-south-1', remotePort: 443, status: 'inactive', connectionId: 'ai-rds-prod' },
-        ];
+        // Sessions fetched from API at runtime
+        let sessions = [];
     </script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>

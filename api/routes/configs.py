@@ -515,3 +515,24 @@ def browse_config():
         subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
 
     return jsonify({"opened": file_path})
+
+
+@configs_bp.route("/user/replace-kubeconfig", methods=["POST"])
+def replace_all_kubeconfig():
+    """Replace kubeconfig_path on all user connections."""
+    data = request.get_json()
+    if not data or "kubeconfig_path" not in data:
+        return jsonify({"error": "Required: kubeconfig_path"}), 400
+
+    new_path = data["kubeconfig_path"]
+    user_config, _ = _load_configs()
+
+    count = 0
+    for conn in user_config.connections.values():
+        conn.kubeconfig_path = new_path
+        count += 1
+
+    config_path = resolve_absolute_path(USER_CONFIG_PATH)
+    save_json(user_config.to_dict(), config_path)
+
+    return jsonify({"updated": count, "kubeconfig_path": new_path})

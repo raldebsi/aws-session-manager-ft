@@ -39,8 +39,6 @@ function hashString(str) {
 
 function showToast(message, type = 'info', duration = 3500) {
     const contentHash = hashString(type + ':' + message);
-
-    // Remove existing toast with same hash
     const existing = toastContainer.querySelector(`[data-hash="${contentHash}"]`);
     if (existing) existing.remove();
 
@@ -48,27 +46,17 @@ function showToast(message, type = 'info', duration = 3500) {
     toast.className = `toast toast-${type}`;
     toast.dataset.hash = contentHash;
 
-    const icons = {
-        success: 'fa-circle-check',
-        error: 'fa-circle-exclamation',
-        warning: 'fa-triangle-exclamation',
-        info: 'fa-circle-info'
-    };
-
+    const icons = { success: 'fa-circle-check', error: 'fa-circle-exclamation', warning: 'fa-triangle-exclamation', info: 'fa-circle-info' };
     toast.innerHTML = `
         <i class="fa-solid ${icons[type] || icons.info}"></i>
         <span class="toast-message">${message}</span>
         <button class="toast-close"><i class="fa-solid fa-xmark"></i></button>
     `;
-
     toast.querySelector('.toast-close').addEventListener('click', () => {
         toast.classList.add('toast-exit');
         setTimeout(() => toast.remove(), 200);
     });
-
     toastContainer.appendChild(toast);
-
-    // Auto-dismiss
     setTimeout(() => {
         if (toast.parentNode) {
             toast.classList.add('toast-exit');
@@ -77,14 +65,27 @@ function showToast(message, type = 'info', duration = 3500) {
     }, duration);
 }
 
-// --- Constants (fetched from server on startup) ---
+// --- Constants ---
 
 let CONSTS = null;
+let SETTINGS = null;
 
 async function loadConsts() {
     const res = await fetch('/api/consts');
     CONSTS = await res.json();
     return CONSTS;
+}
+
+async function loadSettings() {
+    const res = await fetch('/api/settings');
+    SETTINGS = await res.json();
+    return SETTINGS;
+}
+
+function getSetting(key) {
+    if (SETTINGS && SETTINGS[key] !== undefined) return SETTINGS[key];
+    if (CONSTS && CONSTS.settings_schema && CONSTS.settings_schema[key]) return CONSTS.settings_schema[key].default;
+    return null;
 }
 
 // --- Page template loader ---
@@ -110,6 +111,7 @@ let currentPane = null;
 const paneRenderers = {
     dashboardPane: renderDashboard,
     configPane: renderConnections,
+    advancedPane: renderAdvanced,
     settingsPane: renderSettings,
 };
 
@@ -133,17 +135,334 @@ document.querySelectorAll('.sidebar-pane').forEach(pane => {
     pane.addEventListener('click', () => switchPane(pane.id));
 });
 
-// --- Dashboard pane ---
+// === SESSION DATA ===
 
-let dashboardView = 'grouped'; // 'grouped' or 'all'
+let tunnelBusy = false; // UI lock: true while any tunnel is starting
+
+async function fetchSessions() {
+    const res = await fetch('/api/sessions');
+    sessions = await res.json();
+    sessions.forEach(s => sessionSearchIndex.delete(s));
+    return sessions;
+}
+
+function isActive(session) {
+    return session.status === 'active';
+}
+
+function isBusy(session) {
+    return session.status === 'starting' || session.status === 'stopping';
+}
+
+async function toggleSession(session) {
+    if (tunnelBusy) return;
+
+    if (!isActive(session)) {
+        // Check max tunnels before connecting
+        const maxTunnels = getSetting('max_tunnels');
+        if (maxTunnels > 0) {
+            const activeCount = sessions.filter(s => isActive(s) || s.status === 'starting').length;
+            if (activeCount >= maxTunnels) {
+                showToast(`Max tunnels reached (${maxTunnels}). Disconnect one first.`, 'warning');
+                return;
+            }
+        }
+    }
+
+    tunnelBusy = true;
+
+    try {
+        if (isActive(session)) {
+            await disconnectSession(session);
+        } else {
+            await connectSession(session);
+        }
+        refreshDashboardStats();
+    } finally {
+        tunnelBusy = false;
+        renderAll();
+    }
+}
+
+// --- Disconnect pipeline ---
+
+async function disconnectSession(session) {
+    const key = session.key;
+    const name = session.name;
+    const tunnelId = session.tunnelId;
+
+    if (!tunnelId) {
+        showToast('No tunnel ID found for this session', 'error');
+        return;
+    }
+
+    session.status = 'stopping';
+    renderAll();
+    openConsoleTab(key);
+
+    logFrontend(key, 'Disconnecting...');
+
+    try {
+        const res = await fetch(`/api/tunnels/${tunnelId}/stop`, {
+            method: 'POST',
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            logFrontend(key, `ERROR: ${data.error || 'Failed to disconnect'}`);
+            showToast(data.error || 'Failed to disconnect', 'error');
+            await fetchSessions();
+            renderAll();
+            return;
+        }
+
+        logFrontend(key, 'Tunnel stopped');
+
+        // Fetch final logs from the killed tunnel process
+        await fetchAndAppendLogs(key);
+
+        logSystem(key, '\u2014 Connection shut down \u2014');
+        showToast(`Disconnected "${name}"`, 'success');
+    } catch (err) {
+        logFrontend(key, `ERROR: ${err.message}`);
+        showToast(err.message, 'error');
+    }
+
+    await fetchSessions();
+    refreshConsoleBody();
+}
+
+// --- Force kill port ---
+
+async function forceKillPort(session) {
+    const port = session.localPort;
+
+    // First check what's on the port
+    let pid;
+    try {
+        const checkRes = await fetch(`/api/consts/port/${port}/pid`);
+        const checkData = await checkRes.json();
+        pid = checkData.pid;
+    } catch {
+        showToast(`Failed to check port ${port}`, 'error');
+        return;
+    }
+
+    if (pid === -1) {
+        showToast(`Nothing is listening on port ${port}`, 'info');
+        return;
+    }
+
+    if (!confirm(`PID ${pid} is listening on port ${port}.\n\nKill it?`)) return;
+
+    try {
+        const res = await fetch('/api/pipelines/kill-port', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port })
+        });
+        const data = await res.json();
+        if (data.killed) {
+            showToast(`Killed PID ${pid} on port ${port}`, 'success');
+            openConsoleTab(session.key);
+            logFrontend(session.key, `Force killed PID ${pid} on port ${port}`);
+        } else {
+            showToast(data.error || `Failed to kill PID ${pid}`, 'error');
+        }
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+
+    await fetchSessions();
+    renderAll();
+}
+
+// --- Connect pipeline (step-by-step, calling existing endpoints) ---
+
+async function connectSession(session) {
+    const key = session.key;
+    session.status = 'starting';
+    renderAll();
+    openConsoleTab(key);
+
+    logFrontend(key, `Starting connection pipeline for "${session.name}"`);
+
+    try {
+        // Step 1: Resolve connection (validates config before starting anything)
+        logFrontend(key, '[1/3] Resolving connection...');
+        renderAll();
+
+        const resolveRes = await fetch(`/api/connections/${key}`);
+        const mapped = await resolveRes.json();
+        if (!resolveRes.ok) {
+            throw new Error(mapped.error || 'Failed to resolve connection');
+        }
+
+        const conn = mapped.connection;
+        logFrontend(key, `Resolved: ${conn.cluster} @ ${conn.region} (${conn.type})`);
+
+        // Step 2: Start tunnel (handles kubeconfig setup + hosts/cluster config + SSM spawn)
+        logFrontend(key, '[2/3] Starting tunnel (kubeconfig + SSM)...');
+        renderAll();
+
+        const tunnelRes = await fetch('/api/tunnels/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                profile: mapped.profile,
+                endpoint: conn.endpoint,
+                bastion: mapped.bastion,
+                cluster_name: conn.cluster,
+                region: conn.region,
+                tunnel_connection_id: key,
+                document_name: conn.document,
+                local_port: mapped.local_port,
+                remote_port: conn.remote_port,
+                kubeconfig_path: mapped.kubeconfig_path
+            })
+        });
+        const tunnelData = await tunnelRes.json();
+
+        if (tunnelData.warning) {
+            logFrontend(key, 'Tunnel already running');
+            await fetchSessions();
+            return;
+        }
+        if (!tunnelRes.ok) {
+            throw new Error(tunnelData.error || 'Failed to start tunnel');
+        }
+
+        const tunnelId = tunnelData.tunnel_id;
+        session.tunnelId = tunnelId;
+        logFrontend(key, `Tunnel started: ${tunnelId}`);
+
+        // Step 3: Wait for readiness (poll stdout)
+        logFrontend(key, '[3/3] Waiting for tunnel readiness...');
+        renderAll();
+
+        let ready = false;
+        const pollMs = getSetting('polling_interval') * 1000;
+        const timeoutMs = getSetting('readiness_timeout') * 1000;
+        const maxAttempts = Math.ceil(timeoutMs / pollMs);
+        for (let i = 0; i < maxAttempts; i++) {
+            await sleep(pollMs);
+            await fetchAndAppendLogs(key);
+
+            const outputRes = await fetch(`/api/tunnels/${tunnelId}/output`);
+            if (outputRes.ok) {
+                const outputData = await outputRes.json();
+                for (const line of outputData.output || []) {
+                    if (line.includes('Waiting for connections')) {
+                        ready = true;
+                        break;
+                    }
+                }
+            }
+            if (ready) break;
+        }
+
+        if (!ready) {
+            logFrontend(key, 'WARNING: Readiness not confirmed (timeout) — tunnel may still be starting');
+            showToast(`"${session.name}" started but readiness not confirmed`, 'warning');
+        } else {
+            logFrontend(key, 'Tunnel is ready');
+        }
+
+        // Non-blocking: K8s health check
+        logFrontend(key, 'Verifying Kubernetes connectivity...');
+        try {
+            const healthParams = mapped.kubeconfig_path ? `?kubeconfig_path=${encodeURIComponent(mapped.kubeconfig_path)}` : '';
+            const healthRes = await fetch(`/api/kube/health${healthParams}`);
+            const healthData = await healthRes.json();
+            if (healthData.status === 'ok') {
+                logFrontend(key, 'Kubernetes health check passed');
+            } else {
+                logFrontend(key, `WARNING: K8s health: ${healthData.message || 'unhealthy'}`);
+            }
+        } catch {
+            logFrontend(key, 'WARNING: K8s health check failed (non-critical)');
+        }
+
+        logSystem(key, '\u2014 Connected successfully \u2014');
+        showToast(`Connected "${session.name}"`, 'success');
+
+    } catch (err) {
+        logFrontend(key, `FAILED: ${err.message}`);
+        logSystem(key, '\u2014 Connection failed \u2014');
+        showToast(err.message, 'error');
+    }
+
+    await fetchSessions();
+    refreshConsoleBody();
+}
+
+async function fetchAndAppendLogs(key) {
+    try {
+        const session = sessions.find(s => s.key === key);
+        const tunnelId = session?.tunnelId;
+        if (!tunnelId) return;
+
+        const tab = consoleTabs[key];
+        if (!tab) return;
+
+        // Track how many backend lines we've already ingested
+        if (!tab._lastStdout) tab._lastStdout = 0;
+        if (!tab._lastStderr) tab._lastStderr = 0;
+
+        // Reset counters if tunnel changed (reconnect)
+        if (tab._tunnelId && tab._tunnelId !== tunnelId) {
+            tab._lastStdout = 0;
+            tab._lastStderr = 0;
+        }
+        tab._tunnelId = tunnelId;
+
+        const [stdoutRes, stderrRes] = await Promise.all([
+            fetch(`/api/tunnels/${tunnelId}/output`),
+            fetch(`/api/tunnels/${tunnelId}/errors`),
+        ]);
+
+        let newStdout = [], newStderr = [];
+        if (stdoutRes.ok) {
+            const data = await stdoutRes.json();
+            const allStdout = data.output || [];
+            newStdout = allStdout.slice(tab._lastStdout);
+            tab._lastStdout = allStdout.length;
+        }
+        if (stderrRes.ok) {
+            const data = await stderrRes.json();
+            const allStderr = data.errors || [];
+            newStderr = allStderr.slice(tab._lastStderr);
+            tab._lastStderr = allStderr.length;
+        }
+
+        newStdout.forEach(line => appendLog(tab, { stream: 'stdout', text: line }));
+        newStderr.forEach(line => appendLog(tab, { stream: 'stderr', text: line }));
+
+        if ((newStdout.length || newStderr.length) && activeConsoleKey === key) {
+            refreshConsoleBody();
+        }
+    } catch { /* non-critical */ }
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Render both sidebar and dashboard content
+function renderAll() {
+    renderSidebar();
+    refreshDashboardContent();
+}
+
+// === DASHBOARD PANE ===
+
+let dashboardView = 'grouped';
 let dashboardQuery = '';
 
-// Build a single search string per session for fast matching
+const sessionSearchIndex = new WeakMap();
+
 function buildSearchIndex(session) {
     return Object.values(session).join('\x00').toLowerCase();
 }
-
-const sessionSearchIndex = new WeakMap();
 
 function getSearchIndex(session) {
     let idx = sessionSearchIndex.get(session);
@@ -164,42 +483,25 @@ function filterSessions(query) {
 }
 
 async function renderDashboard() {
-    const html = await fetchPage('dashboard');
+    const [html] = await Promise.all([fetchPage('dashboard'), fetchSessions()]);
     mainContentBody.innerHTML = html;
 
     const searchInput = document.getElementById('dashboardSearch');
     const viewBtns = document.querySelectorAll('.dashboard-view-toggle .view-btn');
 
-    // Restore state
     searchInput.value = dashboardQuery;
-    viewBtns.forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.view === dashboardView);
-    });
+    viewBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.view === dashboardView));
 
-    function refresh() {
-        const filtered = filterSessions(dashboardQuery);
-        const container = document.getElementById('dashboardContent');
-        container.innerHTML = '';
-
-        if (filtered.length === 0) {
-            container.innerHTML = '<div class="dashboard-no-results"><i class="fa-solid fa-magnifying-glass"></i> No sessions match your search</div>';
-            return;
-        }
-
-        if (dashboardView === 'all') {
-            renderFlatView(container, filtered);
-        } else {
-            const groupKey = dashboardView === 'region' ? 'region' : 'connectionId';
-            renderGroupedView(container, filtered, groupKey);
-        }
-    }
+    refreshDashboardContent();
+    refreshDashboardStats();
+    renderConsoleTabs();
 
     let searchTimer = null;
     searchInput.addEventListener('input', () => {
         clearTimeout(searchTimer);
         searchTimer = setTimeout(() => {
             dashboardQuery = searchInput.value.trim();
-            refresh();
+            refreshDashboardContent();
         }, 80);
     });
 
@@ -207,11 +509,44 @@ async function renderDashboard() {
         btn.addEventListener('click', () => {
             dashboardView = btn.dataset.view;
             viewBtns.forEach(b => b.classList.toggle('active', b === btn));
-            refresh();
+            refreshDashboardContent();
         });
     });
+}
 
-    refresh();
+function refreshDashboardContent() {
+    if (currentPane !== 'dashboardPane') return;
+    const container = document.getElementById('dashboardContent');
+    if (!container) return;
+
+    const filtered = filterSessions(dashboardQuery);
+    container.innerHTML = '';
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="dashboard-no-results"><i class="fa-solid fa-magnifying-glass"></i> No sessions match your search</div>';
+        return;
+    }
+
+    if (dashboardView === 'all') {
+        renderFlatView(container, filtered);
+    } else {
+        const groupKey = dashboardView === 'region' ? 'region' : 'connectionId';
+        renderGroupedView(container, filtered, groupKey);
+    }
+}
+
+async function refreshDashboardStats() {
+    if (currentPane !== 'dashboardPane') return;
+    try {
+        const res = await fetch('/api/sessions/stats');
+        const stats = await res.json();
+        const el = (id) => document.getElementById(id);
+        if (el('statActive')) el('statActive').textContent = stats.active_sessions;
+        if (el('statTotal')) el('statTotal').textContent = stats.total_sessions;
+        if (el('statConnections')) el('statConnections').textContent = stats.total_connections;
+        if (el('statErrors')) el('statErrors').textContent = stats.errored_sessions;
+        if (el('statRegions')) el('statRegions').textContent = stats.regions;
+    } catch { /* non-critical */ }
 }
 
 function renderGroupedView(container, filtered, groupKey) {
@@ -223,13 +558,11 @@ function renderGroupedView(container, filtered, groupKey) {
     });
 
     for (const [groupId, groupSessions] of Object.entries(groups)) {
-        const first = groupSessions[0];
         const group = document.createElement('div');
         group.className = 'dashboard-group';
 
-        // For connection grouping show region; for region grouping no badge needed
         const badgeHtml = groupKey !== 'region'
-            ? `<span class="dashboard-group-badge">${first.region}</span>`
+            ? `<span class="dashboard-group-badge">${groupSessions[0].region}</span>`
             : '';
 
         const header = document.createElement('div');
@@ -263,15 +596,30 @@ function renderFlatView(container, filtered) {
     container.appendChild(grid);
 }
 
+function sessionIcon(session) {
+    if (session.status === 'starting') return 'fa-spinner fa-spin';
+    if (session.status === 'stopping') return 'fa-spinner fa-spin';
+    return 'fa-power-off';
+}
+
+function sessionBtnClass(session) {
+    if (session.status === 'active' || session.status === 'stopping') return 'on';
+    return 'off';
+}
+
 function createDashboardCard(session) {
     const el = document.createElement('div');
     el.className = 'session-item';
-    el.dataset.sessionId = session.id;
+    el.dataset.sessionKey = session.key;
     if (isActive(session)) el.classList.add('active');
     if (session.status === 'error') el.classList.add('error');
-    if (session.status === 'inactive') el.classList.add('inactive');
+    if (session.status === 'starting') el.classList.add('starting');
+    if (session.status === 'stopping') el.classList.add('stopping');
+    if (tunnelBusy && !isBusy(session)) el.classList.add('tunnel-lock');
 
-    const btnClass = isActive(session) ? 'on' : 'off';
+    const btnClass = sessionBtnClass(session);
+    const btnIcon = sessionIcon(session);
+    const isOn = btnClass === 'on';
 
     el.innerHTML = `
         <div class="session-top">
@@ -284,27 +632,202 @@ function createDashboardCard(session) {
                     <span class="session-type-badge">${session.type}</span>
                 </div>
             </div>
-            <button class="session-btn session-shutdown ${btnClass}" title="Shutdown">
+            <button class="session-btn session-shutdown ${btnClass}" title="${isOn ? 'Disconnect' : 'Connect'}">
                 <span class="shutdown-icon">
-                    <i class="fa-solid fa-power-off"></i>
+                    <i class="fa-solid ${btnIcon}"></i>
                 </span>
             </button>
         </div>
         <div class="session-bottom">
             <span class="session-ports">${session.localPort} &rarr; <span class="session-region">${session.region}</span>:${session.remotePort}</span>
+            <button class="port-kill-btn" title="Force kill process on port ${session.localPort}">
+                <i class="fa-solid fa-skull-crossbones"></i>
+            </button>
         </div>
     `;
 
-    const btn = el.querySelector('.session-shutdown');
-    btn.addEventListener('click', (e) => {
+    el.querySelector('.session-shutdown').addEventListener('click', (e) => {
         e.stopPropagation();
         toggleSession(session);
     });
 
+    el.querySelector('.port-kill-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        forceKillPort(session);
+    });
+
+    // Click card body to open console
+    el.addEventListener('click', () => openConsoleTab(session.key));
+
     return el;
 }
 
-// --- Connections pane ---
+// === CONSOLE PANEL ===
+
+// Each tab: { open, logs: [{stream, text}], _lastStdout, _lastStderr }
+const consoleTabs = {};
+let activeConsoleKey = null;
+
+function ensureConsoleTab(key) {
+    if (!consoleTabs[key]) {
+        consoleTabs[key] = { open: false, logs: [], _lastStdout: 0, _lastStderr: 0 };
+    }
+    return consoleTabs[key];
+}
+
+function appendLog(tab, entry) {
+    tab.logs.push(entry);
+    const maxSize = getSetting('max_log_size');
+    if (maxSize > 0 && tab.logs.length > maxSize) {
+        const trimCount = tab.logs.length - maxSize;
+        tab.logs.splice(0, trimCount);
+        // Reset rendered count so console re-renders correctly
+        _consoleRenderedCount = Math.max(0, _consoleRenderedCount - trimCount);
+    }
+}
+
+function logFrontend(key, msg) {
+    const tab = ensureConsoleTab(key);
+    appendLog(tab, { stream: 'frontend', text: msg });
+    if (activeConsoleKey === key) refreshConsoleBody();
+}
+
+function logSystem(key, msg) {
+    const tab = ensureConsoleTab(key);
+    appendLog(tab, { stream: 'system', text: msg });
+    if (activeConsoleKey === key) refreshConsoleBody();
+}
+
+function openConsoleTab(key) {
+    const tab = ensureConsoleTab(key);
+    tab.open = true;
+    activeConsoleKey = key;
+    renderConsoleTabs();
+    refreshConsoleBody();
+}
+
+function closeConsoleTab(key) {
+    if (consoleTabs[key]) {
+        consoleTabs[key].open = false;
+    }
+    if (activeConsoleKey === key) {
+        const openKeys = Object.keys(consoleTabs).filter(k => consoleTabs[k].open);
+        activeConsoleKey = openKeys.length > 0 ? openKeys[openKeys.length - 1] : null;
+    }
+    renderConsoleTabs();
+    refreshConsoleBody();
+}
+
+function updateConsolePanelVisibility() {
+    const panel = document.getElementById('consolePanel');
+    if (!panel) return;
+    const hasOpenTabs = Object.values(consoleTabs).some(t => t.open);
+    panel.style.display = hasOpenTabs ? '' : 'none';
+}
+
+function renderConsoleTabs() {
+    const tabsEl = document.getElementById('consoleTabs');
+    if (!tabsEl) return;
+    tabsEl.innerHTML = '';
+
+    for (const [key, tab] of Object.entries(consoleTabs)) {
+        if (!tab.open) continue;
+        const session = sessions.find(s => s.key === key);
+        const name = session ? session.name : key;
+        const status = session ? session.status : 'inactive';
+
+        const tabEl = document.createElement('button');
+        tabEl.className = `console-tab${key === activeConsoleKey ? ' active' : ''}`;
+        tabEl.innerHTML = `
+            <span class="console-tab-dot ${status}"></span>
+            ${name}
+            <span class="console-tab-close" title="Close"><i class="fa-solid fa-xmark"></i></span>
+        `;
+
+        tabEl.addEventListener('click', (e) => {
+            if (e.target.closest('.console-tab-close')) {
+                closeConsoleTab(key);
+            } else {
+                activeConsoleKey = key;
+                renderConsoleTabs();
+                refreshConsoleBody();
+            }
+        });
+
+        tabsEl.appendChild(tabEl);
+    }
+
+    updateConsolePanelVisibility();
+}
+
+const STREAM_PREFIXES = {
+    stdout:   '[tunnel] ',
+    stderr:   '[error]  ',
+    frontend: '[client] ',
+    system:   '         ',
+};
+
+let _consoleRenderedKey = null;
+let _consoleRenderedCount = 0;
+
+function refreshConsoleBody() {
+    const bodyEl = document.getElementById('consoleBody');
+    if (!bodyEl) return;
+
+    if (!activeConsoleKey) {
+        bodyEl.innerHTML = '<div class="console-empty">No session selected</div>';
+        _consoleRenderedKey = null;
+        _consoleRenderedCount = 0;
+        return;
+    }
+
+    const tab = consoleTabs[activeConsoleKey];
+    if (!tab || tab.logs.length === 0) {
+        bodyEl.innerHTML = '<div class="console-empty">No output yet</div>';
+        _consoleRenderedKey = null;
+        _consoleRenderedCount = 0;
+        return;
+    }
+
+    // If switching tabs, full re-render
+    if (_consoleRenderedKey !== activeConsoleKey) {
+        bodyEl.innerHTML = '';
+        _consoleRenderedCount = 0;
+        _consoleRenderedKey = activeConsoleKey;
+    }
+
+    // Only append new lines
+    const newEntries = tab.logs.slice(_consoleRenderedCount);
+    if (newEntries.length === 0) return;
+
+    // Check if user has scrolled up (not at bottom)
+    const wasAtBottom = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 20;
+
+    newEntries.forEach(entry => {
+        const div = document.createElement('div');
+        div.className = `console-line ${entry.stream}`;
+
+        const prefix = document.createElement('span');
+        prefix.className = 'console-prefix';
+        prefix.textContent = STREAM_PREFIXES[entry.stream] || '';
+
+        div.appendChild(prefix);
+        div.appendChild(document.createTextNode(entry.text));
+        bodyEl.appendChild(div);
+    });
+
+    _consoleRenderedCount = tab.logs.length;
+
+    // Only auto-scroll if user was already at the bottom
+    if (wasAtBottom) {
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+    }
+}
+
+// === HEALTH CHECKER (polls every 5s) ===
+
+
+// === CONNECTIONS PANE ===
 
 let connectionsCache = null;
 let userConnectionsCache = null;
@@ -334,7 +857,9 @@ function invalidateCaches() {
     usedPortsCache = null;
 }
 
-function goBackToConnections() {
+async function goBackToConnections() {
+    await fetchSessions();
+    renderSidebar();
     mainTopbarTitle.textContent = 'Connections';
     currentPane = null;
     switchPane('configPane');
@@ -348,13 +873,11 @@ function connectionFingerprint(conn) {
 function findDuplicateConnections(connections) {
     const fingerprints = {};
     const duplicates = {};
-
     for (const [key, conn] of Object.entries(connections)) {
         const fp = connectionFingerprint(conn);
         if (!fingerprints[fp]) fingerprints[fp] = [];
         fingerprints[fp].push(key);
     }
-
     for (const keys of Object.values(fingerprints)) {
         if (keys.length > 1) {
             for (const key of keys) {
@@ -375,9 +898,11 @@ async function renderConnections() {
 
         mainContentBody.innerHTML = html;
 
+        // Build set of referenced connection IDs
         const referencedIds = new Set();
         Object.values(userConnections).forEach(uc => referencedIds.add(uc.connection_id));
 
+        // Build set of clashing ports
         const clashingPorts = new Set();
         for (const [port, users] of Object.entries(usedPorts)) {
             if (users.length > 1) clashingPorts.add(port);
@@ -385,6 +910,7 @@ async function renderConnections() {
 
         const duplicates = findDuplicateConnections(connections);
 
+        // Connections list
         const connListEl = document.getElementById('connectionsList');
         const connKeys = Object.keys(connections);
         if (connKeys.length === 0) {
@@ -398,6 +924,7 @@ async function renderConnections() {
             });
         }
 
+        // User connections list
         const userListEl = document.getElementById('userConnectionsList');
         const userKeys = Object.keys(userConnections);
         if (userKeys.length === 0) {
@@ -435,15 +962,15 @@ function createConnCard(data, type, key, flags = {}) {
         ? `${data.region} \u00b7 ${data.cluster}`
         : data.detail;
 
-    const clashIcon = flags.portClash
-        ? '<i class="fa-solid fa-triangle-exclamation conn-port-clash" title="Port conflict"></i>'
-        : '';
-
     let dupIcon = '';
     if (flags.duplicateOf && flags.duplicateOf.length > 0) {
         const dupNames = flags.duplicateOf.join(', ');
         dupIcon = `<i class="fa-solid fa-triangle-exclamation conn-duplicate-warn" title="Duplicate of: ${dupNames}"></i>`;
     }
+
+    const clashIcon = flags.portClash
+        ? '<i class="fa-solid fa-triangle-exclamation conn-port-clash" title="Port conflict"></i>'
+        : '';
 
     el.innerHTML = `
         <div class="conn-card-icon"><i class="fa-solid ${icon}"></i></div>
@@ -476,7 +1003,13 @@ function createConnCard(data, type, key, flags = {}) {
             e.stopPropagation();
             const action = btn.dataset.action;
             if (action === 'delete') handleDelete(type, key, data.name);
-            if (action === 'duplicate') handleDuplicate(type, data);
+            if (action === 'duplicate') {
+                if (type === 'connection') {
+                    renderCreateConnectionForm({ ...data, id: '' }, null);
+                } else {
+                    renderCreateUserConnectionForm({ ...(data._raw || data), connection_name: '' }, null);
+                }
+            }
             if (action === 'share') handleShare(type, key);
             if (action === 'browse') handleBrowse(type, key);
         });
@@ -489,7 +1022,6 @@ function createConnCard(data, type, key, flags = {}) {
 
 async function handleDelete(type, key, name) {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
-
     const kind = type === 'connection' ? '' : '/user';
     const res = await fetch(`/api/configs${kind}/${key}`, { method: 'DELETE' });
     if (!res.ok) {
@@ -497,19 +1029,9 @@ async function handleDelete(type, key, name) {
         showToast(err.error || 'Failed to delete', 'error');
         return;
     }
-
     showToast(`Deleted "${name}"`, 'success');
     invalidateCaches();
     goBackToConnections();
-}
-
-function handleDuplicate(type, data) {
-    if (type === 'connection') {
-        renderCreateConnectionForm({ ...data, id: '' }, null);
-    } else {
-        const raw = data._raw || data;
-        renderCreateUserConnectionForm({ ...raw, connection_name: '' }, null);
-    }
 }
 
 async function handleShare(type, key) {
@@ -529,7 +1051,6 @@ async function handleShare(type, key) {
 
 function showShareModal(encoded) {
     document.querySelector('.share-overlay')?.remove();
-
     const overlay = document.createElement('div');
     overlay.className = 'share-overlay';
     overlay.innerHTML = `
@@ -542,23 +1063,13 @@ function showShareModal(encoded) {
             </div>
         </div>
     `;
-
-    const mainContent = document.querySelector('.main-content');
-    mainContent.appendChild(overlay);
-
+    document.querySelector('.main-content').appendChild(overlay);
     overlay.querySelector('#shareCopyBtn').addEventListener('click', async () => {
-        try {
-            await writeClipboard(encoded);
-            showToast('Copied to clipboard', 'success');
-        } catch {
-            showToast('Failed to copy to clipboard', 'error');
-        }
+        try { await writeClipboard(encoded); showToast('Copied to clipboard', 'success'); }
+        catch { showToast('Failed to copy', 'error'); }
     });
-
     overlay.querySelector('#shareCloseBtn').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) overlay.remove();
-    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
 
 async function handleBrowse(type, key) {
@@ -574,7 +1085,7 @@ async function handleBrowse(type, key) {
     }
 }
 
-// --- Helpers: populate selects from consts ---
+// --- Helpers ---
 
 function populateSelect(selectEl, items, valueKey, labelKey) {
     selectEl.innerHTML = '';
@@ -586,12 +1097,11 @@ function populateSelect(selectEl, items, valueKey, labelKey) {
     });
 }
 
-// --- Create/Edit Connection Form ---
+// === CREATE/EDIT CONNECTION FORM ===
 
 async function renderCreateConnectionForm(editData = null, editKey = null) {
     mainContentBody.innerHTML = '';
     const isEdit = editData !== null && editKey !== null;
-
     mainTopbarTitle.textContent = isEdit ? 'Edit Connection' : 'New Connection';
 
     const html = await fetchPage('create_connection');
@@ -606,13 +1116,11 @@ async function renderCreateConnectionForm(editData = null, editKey = null) {
     }
 
     populateSelect(document.getElementById('connType'), CONSTS.connection_types, 'value', 'label');
-
     document.getElementById('connRemotePort').value = CONSTS.defaults.remote_port;
     document.getElementById('connDocument').value = CONSTS.defaults.ssm_document;
 
     if (editData) {
         fillConnectionForm(editData);
-
         if (isEdit) {
             const idInput = document.getElementById('connId');
             idInput.readOnly = true;
@@ -643,10 +1151,7 @@ async function renderCreateConnectionForm(editData = null, editKey = null) {
     if (!isEdit) {
         document.getElementById('pasteClipboardBtn').addEventListener('click', async () => {
             const config = await readClipboardConfig('connection');
-            if (config) {
-                fillConnectionForm(config);
-                showToast('Pre-filled from clipboard', 'success');
-            }
+            if (config) { fillConnectionForm(config); showToast('Pre-filled from clipboard', 'success'); }
         });
     }
 }
@@ -687,14 +1192,11 @@ async function saveConnection(editKey) {
             body: JSON.stringify({ id, type, name, cluster, region, endpoint, document: ssmDocument, remote_port: remotePort, bastions })
         });
         const data = await res.json();
-
         if (!res.ok) {
             msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${data.error}</div>`;
             return;
         }
-
-        const verb = isEdit ? 'updated' : 'created';
-        showToast(`Connection "${name}" ${verb}`, 'success');
+        showToast(`Connection "${name}" ${isEdit ? 'updated' : 'created'}`, 'success');
         invalidateCaches();
         setTimeout(goBackToConnections, 600);
     } catch (err) {
@@ -702,13 +1204,12 @@ async function saveConnection(editKey) {
     }
 }
 
-// --- Create/Edit User Connection Form ---
+// === CREATE/EDIT USER CONNECTION (SESSION) FORM ===
 
 async function renderCreateUserConnectionForm(editData = null, editKey = null) {
     mainContentBody.innerHTML = '';
     const isEdit = editData !== null && editKey !== null;
-
-    mainTopbarTitle.textContent = isEdit ? 'Edit User Connection' : 'New User Connection';
+    mainTopbarTitle.textContent = isEdit ? 'Edit Session' : 'New Session';
 
     const [html, connections, usedPorts] = await Promise.all([
         fetchPage('create_user_connection'), fetchConnections(), fetchUsedPorts()
@@ -719,9 +1220,7 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
         mainContentBody.innerHTML = `
             <div class="form-container">
                 <div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> No connections available. Create a connection first.</div>
-                <div class="form-actions">
-                    <button class="conn-btn secondary" id="backBtn">Back</button>
-                </div>
+                <div class="form-actions"><button class="conn-btn secondary" id="backBtn">Back</button></div>
             </div>
         `;
         document.getElementById('backBtn').addEventListener('click', goBackToConnections);
@@ -731,7 +1230,7 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
     mainContentBody.innerHTML = html;
 
     if (isEdit) {
-        document.getElementById('formTitleText').textContent = 'Edit User Connection';
+        document.getElementById('formTitleText').textContent = 'Edit Session';
         document.getElementById('editBadge').style.display = '';
         document.getElementById('saveUcIcon').className = 'fa-solid fa-pen';
         document.getElementById('saveUcLabel').textContent = 'Update';
@@ -763,19 +1262,18 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
     connSelect.addEventListener('change', updateBastions);
 
     document.getElementById('ucProfile').value = CONSTS.defaults.profile;
-    document.getElementById('ucKubeconfig').placeholder = CONSTS.defaults.kubeconfig_path;
+    const kubeconfigDefault = getSetting('default_kubeconfig_path') || CONSTS.defaults.kubeconfig_path;
+    document.getElementById('ucKubeconfig').value = kubeconfigDefault;
+    document.getElementById('ucKubeconfig').placeholder = kubeconfigDefault;
 
-    if (editData) {
-        fillUserConnectionForm(editData, connections);
-    }
+    if (editData) fillUserConnectionForm(editData, connections);
 
     const portInput = document.getElementById('ucLocalPort');
     const portWarning = document.getElementById('portWarning');
-
     portInput.addEventListener('input', () => {
         const port = portInput.value.trim();
         portWarning.innerHTML = '';
-        if (port && usedPorts[port]) {
+        if (port && usedPorts && usedPorts[port]) {
             const others = usedPorts[port].filter(u => u.connection_key !== editKey);
             if (others.length > 0) {
                 const names = others.map(u => u.connection_name).join(', ');
@@ -783,7 +1281,6 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
             }
         }
     });
-
     if (editData && editData.local_port) portInput.dispatchEvent(new Event('input'));
 
     document.getElementById('cancelUcBtn').addEventListener('click', goBackToConnections);
@@ -792,10 +1289,7 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
     if (!isEdit) {
         document.getElementById('pasteClipboardBtn').addEventListener('click', async () => {
             const config = await readClipboardConfig('user');
-            if (config) {
-                fillUserConnectionForm(config, connections);
-                showToast('Pre-filled from clipboard', 'success');
-            }
+            if (config) { fillUserConnectionForm(config, connections); showToast('Pre-filled from clipboard', 'success'); }
         });
     }
 }
@@ -817,13 +1311,7 @@ async function saveUserConnection(editKey) {
         return;
     }
 
-    const body = {
-        connection_id: connectionId,
-        bastion_id: bastionId,
-        local_port: parseInt(localPort),
-        profile,
-        connection_name: connectionName
-    };
+    const body = { connection_id: connectionId, bastion_id: bastionId, local_port: parseInt(localPort), profile, connection_name: connectionName };
     if (description) body.description = description;
     if (kubeconfigPath) body.kubeconfig_path = kubeconfigPath;
 
@@ -834,18 +1322,12 @@ async function saveUserConnection(editKey) {
     try {
         const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const data = await res.json();
-
         if (!res.ok) {
             msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${data.error}</div>`;
             return;
         }
-
-        if (data.warnings && data.warnings.length > 0) {
-            data.warnings.forEach(w => showToast(w, 'warning', 5000));
-        }
-
-        const verb = isEdit ? 'updated' : 'created';
-        showToast(`User connection "${connectionName}" ${verb}`, 'success');
+        if (data.warnings) data.warnings.forEach(w => showToast(w, 'warning', 5000));
+        showToast(`Session "${connectionName}" ${isEdit ? 'updated' : 'created'}`, 'success');
         invalidateCaches();
         setTimeout(goBackToConnections, 600);
     } catch (err) {
@@ -853,7 +1335,7 @@ async function saveUserConnection(editKey) {
     }
 }
 
-// --- Import Form (pre-fills create form, does NOT create directly) ---
+// === IMPORT FORM ===
 
 async function renderImportForm() {
     mainContentBody.innerHTML = '';
@@ -862,48 +1344,37 @@ async function renderImportForm() {
     const html = await fetchPage('import_connection');
     mainContentBody.innerHTML = html;
 
-    const tabEncoded = document.getElementById('tabEncoded');
-    const tabFile = document.getElementById('tabFile');
-    const sectionEncoded = document.getElementById('importEncodedSection');
-    const sectionFile = document.getElementById('importFileSection');
-
     let activeTab = 'encoded';
     let parsedFileData = null;
     let detectedFileKind = null;
 
-    tabEncoded.addEventListener('click', () => {
+    document.getElementById('tabEncoded').addEventListener('click', () => {
         activeTab = 'encoded';
-        tabEncoded.classList.add('active');
-        tabFile.classList.remove('active');
-        sectionEncoded.style.display = '';
-        sectionFile.style.display = 'none';
+        document.getElementById('tabEncoded').classList.add('active');
+        document.getElementById('tabFile').classList.remove('active');
+        document.getElementById('importEncodedSection').style.display = '';
+        document.getElementById('importFileSection').style.display = 'none';
     });
 
-    tabFile.addEventListener('click', () => {
+    document.getElementById('tabFile').addEventListener('click', () => {
         activeTab = 'file';
-        tabFile.classList.add('active');
-        tabEncoded.classList.remove('active');
-        sectionEncoded.style.display = 'none';
-        sectionFile.style.display = '';
+        document.getElementById('tabFile').classList.add('active');
+        document.getElementById('tabEncoded').classList.remove('active');
+        document.getElementById('importEncodedSection').style.display = 'none';
+        document.getElementById('importFileSection').style.display = '';
     });
 
-    const fileInput = document.getElementById('importFile');
-    const fileNameEl = document.getElementById('importFileName');
-
-    fileInput.addEventListener('change', () => {
-        const file = fileInput.files[0];
+    document.getElementById('importFile').addEventListener('change', () => {
+        const file = document.getElementById('importFile').files[0];
         if (!file) return;
-        fileNameEl.textContent = file.name;
-
+        document.getElementById('importFileName').textContent = file.name;
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
                 parsedFileData = JSON.parse(e.target.result);
                 detectedFileKind = detectKind(parsedFileData);
-                const preview = document.getElementById('importFilePreview');
-                const kindEl = document.getElementById('importDetectedKind');
-                preview.style.display = '';
-                kindEl.textContent = detectedFileKind ? detectedFileKind.toUpperCase() : 'UNKNOWN';
+                document.getElementById('importFilePreview').style.display = '';
+                document.getElementById('importDetectedKind').textContent = detectedFileKind ? detectedFileKind.toUpperCase() : 'UNKNOWN';
             } catch {
                 parsedFileData = null;
                 detectedFileKind = null;
@@ -917,51 +1388,25 @@ async function renderImportForm() {
     document.getElementById('submitImportBtn').addEventListener('click', async () => {
         const msgEl = document.getElementById('formMessage');
         msgEl.innerHTML = '';
-
         try {
-            let configData = null;
-            let kind = null;
-
+            let configData = null, kind = null;
             if (activeTab === 'encoded') {
                 const encoded = document.getElementById('importEncoded').value.trim();
-                if (!encoded) {
-                    msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Please paste an encoded string.</div>';
-                    return;
-                }
-                // Decode server-side
-                const res = await fetch('/api/configs/share/decode', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ encoded })
-                });
+                if (!encoded) { msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Please paste an encoded string.</div>'; return; }
+                const res = await fetch('/api/configs/share/decode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ encoded }) });
                 const decoded = await res.json();
-                if (!res.ok) {
-                    msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${decoded.error}</div>`;
-                    return;
-                }
+                if (!res.ok) { msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${decoded.error}</div>`; return; }
                 kind = decoded.kind;
                 configData = decoded.config;
             } else {
-                if (!parsedFileData) {
-                    msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Please select a valid JSON file.</div>';
-                    return;
-                }
+                if (!parsedFileData) { msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Please select a valid JSON file.</div>'; return; }
                 kind = detectedFileKind;
                 configData = parsedFileData;
             }
-
-            if (!kind || !configData) {
-                msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Could not detect config type.</div>';
-                return;
-            }
-
-            // Pre-fill on the appropriate create form
-            showToast(`Imported ${kind} config — review and save`, 'info');
-            if (kind === 'connection') {
-                renderCreateConnectionForm(configData, null);
-            } else {
-                renderCreateUserConnectionForm(configData, null);
-            }
+            if (!kind || !configData) { msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Could not detect config type.</div>'; return; }
+            showToast(`Imported ${kind} config \u2014 review and save`, 'info');
+            if (kind === 'connection') renderCreateConnectionForm(configData, null);
+            else renderCreateUserConnectionForm(configData, null);
         } catch (err) {
             msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${err.message}</div>`;
         }
@@ -974,7 +1419,7 @@ function detectKind(data) {
     return null;
 }
 
-// --- Clipboard helpers (via server-side pyperclip) ---
+// === CLIPBOARD ===
 
 async function readClipboard() {
     const res = await fetch('/api/consts/clipboard');
@@ -984,79 +1429,41 @@ async function readClipboard() {
 }
 
 async function writeClipboard(text) {
-    const res = await fetch('/api/consts/clipboard', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
-    });
-    if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to write clipboard');
-    }
+    const res = await fetch('/api/consts/clipboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Failed to write clipboard'); }
 }
 
 async function readClipboardConfig(expectedKind) {
     let text;
-    try {
-        text = await readClipboard();
-    } catch (err) {
-        showToast('Cannot read clipboard. Try pasting manually.', 'error');
-        return null;
-    }
-
-    if (!text || !text.trim()) {
-        showToast('Clipboard is empty', 'warning');
-        return null;
-    }
-
+    try { text = await readClipboard(); } catch { showToast('Cannot read clipboard', 'error'); return null; }
+    if (!text || !text.trim()) { showToast('Clipboard is empty', 'warning'); return null; }
     text = text.trim();
 
-    // Try parsing as JSON first
     let parsed = null;
-    try {
-        parsed = JSON.parse(text);
-    } catch { /* not JSON, try as encoded string below */ }
+    try { parsed = JSON.parse(text); } catch { /* try encoded */ }
 
     if (parsed) {
-        // Wrapped {kind, config} object
         if (parsed.kind && parsed.config) {
-            if (parsed.kind !== expectedKind) {
-                showToast(`Clipboard has a ${parsed.kind} config, but this form is for ${expectedKind}`, 'error');
-                return null;
-            }
+            if (parsed.kind !== expectedKind) { showToast(`Clipboard has ${parsed.kind}, need ${expectedKind}`, 'error'); return null; }
             return parsed.config;
         }
-
-        // Direct config object
         const kind = detectKind(parsed);
         if (kind === expectedKind) return parsed;
-        if (kind) {
-            showToast(`Clipboard has a ${kind} config, but this form is for ${expectedKind}`, 'error');
-            return null;
-        }
-
-        showToast('Clipboard JSON does not match a known config format', 'error');
+        if (kind) { showToast(`Clipboard has ${kind}, need ${expectedKind}`, 'error'); return null; }
+        showToast('Clipboard JSON not a known config', 'error');
         return null;
     }
 
-    // Try decoding as encoded share string
     try {
-        const res = await fetch('/api/configs/share/decode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ encoded: text })
-        });
+        const res = await fetch('/api/configs/share/decode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ encoded: text }) });
         if (res.ok) {
             const decoded = await res.json();
-            if (decoded.kind !== expectedKind) {
-                showToast(`Encoded string has a ${decoded.kind} config, but this form is for ${expectedKind}`, 'error');
-                return null;
-            }
+            if (decoded.kind !== expectedKind) { showToast(`Encoded has ${decoded.kind}, need ${expectedKind}`, 'error'); return null; }
             return decoded.config;
         }
     } catch { /* ignore */ }
 
-    showToast('Clipboard content is not valid JSON or an encoded share string', 'error');
+    showToast('Clipboard not valid JSON or encoded string', 'error');
     return null;
 }
 
@@ -1069,18 +1476,13 @@ function fillConnectionForm(data) {
     if (data.endpoint) document.getElementById('connEndpoint').value = data.endpoint;
     if (data.document) document.getElementById('connDocument').value = data.document;
     if (data.remote_port) document.getElementById('connRemotePort').value = data.remote_port;
-
     if (data.bastions && Object.keys(data.bastions).length > 0) {
         const entries = document.getElementById('bastionEntries');
         entries.innerHTML = '';
         Object.entries(data.bastions).forEach(([bKey, bVal]) => {
             const row = document.createElement('div');
             row.className = 'bastion-row';
-            row.innerHTML = `
-                <input class="form-input" placeholder="Name (e.g. main)" data-bastion="key" value="${bKey}" />
-                <input class="form-input" placeholder="Instance ID (e.g. i-0abc...)" data-bastion="value" value="${bVal}" />
-                <button class="bastion-remove-btn" title="Remove"><i class="fa-solid fa-xmark"></i></button>
-            `;
+            row.innerHTML = `<input class="form-input" placeholder="Name" data-bastion="key" value="${bKey}" /><input class="form-input" placeholder="Instance ID" data-bastion="value" value="${bVal}" /><button class="bastion-remove-btn" title="Remove"><i class="fa-solid fa-xmark"></i></button>`;
             row.querySelector('.bastion-remove-btn').addEventListener('click', () => row.remove());
             entries.appendChild(row);
         });
@@ -1090,7 +1492,6 @@ function fillConnectionForm(data) {
 function fillUserConnectionForm(data, connections) {
     const connSelect = document.getElementById('ucConnection');
     const bastionSelect = document.getElementById('ucBastion');
-
     if (data.connection_id) {
         connSelect.value = data.connection_id;
         const conn = connections[data.connection_id];
@@ -1110,43 +1511,266 @@ function fillUserConnectionForm(data, connections) {
     if (data.local_port) document.getElementById('ucLocalPort').value = data.local_port;
     if (data.profile) document.getElementById('ucProfile').value = data.profile;
     if (data.kubeconfig_path) document.getElementById('ucKubeconfig').value = data.kubeconfig_path;
-
     document.getElementById('ucLocalPort').dispatchEvent(new Event('input'));
 }
 
-// --- Settings pane ---
+// === ADVANCED ===
 
-function renderSettings() {
-    const container = document.createElement('div');
-    container.className = 'pane-placeholder';
-    container.innerHTML = `
-        <i class="fa-solid fa-gear pane-placeholder-icon"></i>
-        <span class="pane-placeholder-text">Settings</span>
-    `;
-    mainContentBody.appendChild(container);
-}
+async function renderAdvanced() {
+    const [html, userConnections] = await Promise.all([
+        fetchPage('advanced'),
+        fetch('/api/configs/user').then(r => r.json())
+    ]);
 
-// --- Session helpers ---
+    mainContentBody.innerHTML = html;
 
-function isActive(session) {
-    return session.status === 'active';
-}
-
-function toggleSession(session) {
-    if (session.status === 'active') {
-        session.status = 'inactive';
-    } else if (session.status === 'inactive' || session.status === 'error') {
-        session.status = 'active';
+    // Nuke port chips from user connection ports
+    const chipsEl = document.getElementById('nukePortChips');
+    const ports = new Set();
+    for (const uc of Object.values(userConnections)) {
+        ports.add(uc.local_port);
     }
-    sessionSearchIndex.delete(session); // invalidate search cache
-    renderSidebar();
-    if (currentPane === 'dashboardPane') {
-        mainContentBody.innerHTML = '';
-        renderDashboard();
+
+    for (const port of ports) {
+        const chip = document.createElement('button');
+        chip.className = 'nuke-chip';
+        chip.innerHTML = `<i class="fa-solid fa-skull-crossbones"></i> ${port}`;
+        chip.addEventListener('click', () => nukePort(port));
+        chipsEl.appendChild(chip);
+    }
+
+    // Nuke custom port
+    document.getElementById('nukePortBtn').addEventListener('click', () => {
+        const port = parseInt(document.getElementById('nukePortInput').value);
+        if (!port || port < 1 || port > 65535) {
+            showToast('Enter a valid port (1-65535)', 'warning');
+            return;
+        }
+        nukePort(port);
+    });
+
+    // Replace all configs
+    const configPathInput = document.getElementById('replaceConfigPath');
+    configPathInput.value = getSetting('default_kubeconfig_path') || '~/.kube/config';
+
+    document.getElementById('replaceConfigBrowse').addEventListener('click', async () => {
+        const current = configPathInput.value || '~';
+        const dir = current.includes('/') || current.includes('\\')
+            ? current.substring(0, Math.max(current.lastIndexOf('/'), current.lastIndexOf('\\')))
+            : current;
+        try {
+            const res = await fetch('/api/consts/browse-save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initial_dir: dir, default_name: 'config', filetypes: [["All files", "*.*"]] })
+            });
+            const data = await res.json();
+            if (data.path) configPathInput.value = data.path;
+        } catch {
+            showToast('Failed to open file picker', 'error');
+        }
+    });
+
+    document.getElementById('replaceConfigBtn').addEventListener('click', async () => {
+        const newPath = configPathInput.value.trim();
+        if (!newPath) {
+            showToast('Enter a kubeconfig path', 'warning');
+            return;
+        }
+
+        if (!confirm(`Replace kubeconfig path on ALL user connections with:\n\n${newPath}\n\nThis cannot be undone.`)) return;
+
+        try {
+            const res = await fetch('/api/configs/user/replace-kubeconfig', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kubeconfig_path: newPath })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                showToast(`Updated ${data.updated} connections`, 'success');
+            } else {
+                showToast(data.error || 'Failed to replace configs', 'error');
+            }
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    });
+}
+
+async function nukePort(port) {
+    // Check what's on the port first
+    let pid;
+    try {
+        const checkRes = await fetch(`/api/consts/port/${port}/pid`);
+        const checkData = await checkRes.json();
+        pid = checkData.pid;
+    } catch {
+        showToast(`Failed to check port ${port}`, 'error');
+        return;
+    }
+
+    if (pid === -1) {
+        showToast(`Nothing listening on port ${port}`, 'info');
+        return;
+    }
+
+    if (!confirm(`PID ${pid} is listening on port ${port}.\n\nKill it?`)) return;
+
+    try {
+        const res = await fetch('/api/pipelines/kill-port', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port })
+        });
+        const data = await res.json();
+        if (data.killed) {
+            showToast(`Killed PID ${pid} on port ${port}`, 'success');
+        } else {
+            showToast(data.error || `Failed to kill PID ${pid}`, 'error');
+        }
+    } catch (err) {
+        showToast(err.message, 'error');
     }
 }
 
-// --- Sidebar session list ---
+// === SETTINGS ===
+
+async function renderSettings() {
+    const [html, settings] = await Promise.all([
+        fetchPage('settings'),
+        fetch('/api/settings').then(r => r.json())
+    ]);
+
+    mainContentBody.innerHTML = html;
+
+    const schema = CONSTS.settings_schema;
+    const grid = document.getElementById('settingsGrid');
+
+    // Sort by order, then group by group name
+    const sorted = Object.entries(schema).sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
+
+    let currentGroup = null;
+    for (const [key, meta] of sorted) {
+        // Render group heading when group changes, divider after previous group
+        if (meta.group !== currentGroup) {
+            if (currentGroup) {
+                const divider = document.createElement('div');
+                divider.className = 'settings-group-divider';
+                grid.appendChild(divider);
+            }
+            currentGroup = meta.group || null;
+            if (meta.group) {
+                const heading = document.createElement('div');
+                heading.className = 'settings-group-heading';
+                heading.textContent = currentGroup;
+                grid.appendChild(heading);
+            }
+        }
+
+        const formGroup = document.createElement('div');
+        formGroup.className = 'form-group';
+        if (meta.solo) formGroup.classList.add('full-width');
+
+        const value = settings[key] !== undefined ? settings[key] : meta.default;
+        const hintHtml = meta.hint ? `<span class="form-hint">${meta.hint}</span>` : '';
+
+        if (meta.type === 'path') {
+            formGroup.innerHTML = `
+                <label class="form-label">${meta.label}</label>
+                <div class="setting-path-row">
+                    <input class="form-input" id="setting_${key}" type="text" value="${value}" />
+                    <button class="conn-action-btn setting-browse-btn" data-key="${key}" title="Browse">
+                        <i class="fa-solid fa-folder-open"></i>
+                    </button>
+                </div>
+                ${hintHtml}
+            `;
+        } else {
+            const minAttr = meta.min !== undefined ? `min="${meta.min}"` : '';
+            formGroup.innerHTML = `
+                <label class="form-label">${meta.label}</label>
+                <input class="form-input" id="setting_${key}" type="number" ${minAttr} value="${value}" />
+                ${hintHtml}
+            `;
+        }
+
+        grid.appendChild(formGroup);
+    }
+
+    // Browse buttons
+    grid.querySelectorAll('.setting-browse-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const settingKey = btn.dataset.key;
+            const input = document.getElementById(`setting_${settingKey}`);
+            try {
+                const current = input.value || '~';
+                const dir = current.includes('/') || current.includes('\\')
+                    ? current.substring(0, Math.max(current.lastIndexOf('/'), current.lastIndexOf('\\')))
+                    : current;
+                const res = await fetch('/api/consts/browse-save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ initial_dir: dir, default_name: 'config', filetypes: [["All files", "*.*"]] })
+                });
+                const data = await res.json();
+                if (data.path) input.value = data.path;
+            } catch {
+                showToast('Failed to open folder picker', 'error');
+            }
+        });
+    });
+
+    document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
+        const body = {};
+        let valid = true;
+
+        for (const [key, meta] of Object.entries(schema)) {
+            const input = document.getElementById(`setting_${key}`);
+            if (meta.type === 'number') {
+                const val = Number(input.value);
+                if (meta.min !== undefined && val < meta.min) {
+                    showToast(`${meta.label}: minimum is ${meta.min}`, 'error');
+                    input.focus();
+                    valid = false;
+                    break;
+                }
+                body[key] = val;
+            } else {
+                body[key] = input.value;
+            }
+        }
+
+        if (!valid) return;
+
+        const res = await fetch('/api/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        if (res.ok) {
+            SETTINGS = await res.json();
+            showToast('Settings saved', 'success');
+        } else {
+            const data = await res.json();
+            showToast(data.error || 'Failed to save settings', 'error');
+        }
+    });
+
+    document.getElementById('resetSettingsBtn').addEventListener('click', async () => {
+        const res = await fetch('/api/settings/defaults');
+        const defaults = await res.json();
+
+        for (const [key, meta] of Object.entries(schema)) {
+            const input = document.getElementById(`setting_${key}`);
+            input.value = defaults[key] !== undefined ? defaults[key] : meta.default;
+        }
+        showToast('Reset to defaults (not saved yet)', 'info');
+    });
+}
+
+// === SIDEBAR ===
 
 function renderSidebar() {
     const activeList = document.getElementById('activeSessions');
@@ -1155,16 +1779,15 @@ function renderSidebar() {
 
     activeList.innerHTML = '';
     availableList.innerHTML = '';
-
     let numActive = 0;
 
     sessions.forEach(session => {
-        const sidebarItem = createSidebarItem(session);
-        if (isActive(session)) {
-            activeList.appendChild(sidebarItem);
+        const item = createSidebarItem(session);
+        if (isActive(session) || isBusy(session)) {
+            activeList.appendChild(item);
             numActive++;
         } else {
-            availableList.appendChild(sidebarItem);
+            availableList.appendChild(item);
         }
     });
 
@@ -1174,12 +1797,28 @@ function renderSidebar() {
 function createSidebarItem(session) {
     const el = document.createElement('div');
     el.className = 'sidebar-session-item';
-    el.dataset.sessionId = session.id;
+    el.dataset.sessionKey = session.key;
     if (isActive(session)) el.classList.add('active');
     if (session.status === 'error') el.classList.add('error');
+    if (session.status === 'starting') el.classList.add('starting');
+    if (session.status === 'stopping') el.classList.add('stopping');
+
+    const isOn = isActive(session) || session.status === 'stopping';
+    const btnIcon = isBusy(session) ? 'fa-spinner fa-spin' : 'fa-power-off';
+    const btnClass = isOn ? 'on' : 'off';
 
     el.innerHTML = `
-        <div class="sidebar-session-name">${session.name}</div>
+        <div class="sidebar-session-top">
+            <span class="sidebar-session-name" title="${session.name}">${session.name}</span>
+            <div class="sidebar-session-actions">
+                <button class="sidebar-action-btn sidebar-nuke-btn" title="Force kill port ${session.localPort}">
+                    <i class="fa-solid fa-skull-crossbones"></i>
+                </button>
+                <button class="sidebar-action-btn sidebar-power-btn ${btnClass}" title="${isOn ? 'Disconnect' : 'Connect'}">
+                    <i class="fa-solid ${btnIcon}"></i>
+                </button>
+            </div>
+        </div>
         <div class="sidebar-session-detail">
             <span class="sidebar-session-desc">${session.description}</span>
             <span class="session-type-badge">${session.type}</span>
@@ -1187,8 +1826,23 @@ function createSidebarItem(session) {
         <div class="sidebar-session-port">${session.localPort} &rarr; ${session.region}:${session.remotePort}</div>
     `;
 
-    el.addEventListener('click', () => {
+    el.querySelector('.sidebar-power-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
         toggleSession(session);
+    });
+
+    el.querySelector('.sidebar-nuke-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        forceKillPort(session);
+    });
+
+    // Click the item body to open its console
+    el.addEventListener('click', () => {
+        if (currentPane !== 'dashboardPane') {
+            currentPane = null;
+            switchPane('dashboardPane');
+        }
+        openConsoleTab(session.key);
     });
 
     return el;
@@ -1199,11 +1853,31 @@ document.getElementById('newConnectionBtn').addEventListener('click', () => {
     switchPane('configPane');
 });
 
-// --- Startup ---
+document.getElementById('consoleCopyBtn').addEventListener('click', async () => {
+    const bodyEl = document.getElementById('consoleBody');
+    if (!bodyEl) return;
+    const text = bodyEl.innerText;
+    if (!text.trim()) { showToast('Nothing to copy', 'warning'); return; }
+    try { await writeClipboard(text); showToast('Logs copied', 'success'); }
+    catch { showToast('Failed to copy', 'error'); }
+});
+
+// === STARTUP ===
+
+async function rehydrateActiveSessions() {
+    const activeSessions = sessions.filter(s => s.status === 'active' && s.tunnelId);
+    for (const session of activeSessions) {
+        ensureConsoleTab(session.key);
+        await fetchAndAppendLogs(session.key);
+    }
+}
+
 async function init() {
-    await loadConsts();
+    await Promise.all([loadConsts(), loadSettings()]);
+    await fetchSessions();
     renderSidebar();
     switchPane('dashboardPane');
+    rehydrateActiveSessions(); // non-blocking: populate logs for active tunnels
 }
 
 init();

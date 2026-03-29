@@ -3,11 +3,13 @@ from flask import Blueprint, render_template, abort
 pages_bp = Blueprint("pages", __name__, url_prefix="/api/pages")
 
 ALLOWED_PAGES = {
+    "advanced",
     "connections",
     "create_connection",
     "create_user_connection",
     "dashboard",
     "import_connection",
+    "settings",
 }
 
 

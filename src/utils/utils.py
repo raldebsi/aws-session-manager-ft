@@ -133,6 +133,63 @@ def update_hosts(endpoint: str):
         f.write(entry)
 
 
+def get_pid_on_port(port: int) -> int:
+    """Find the PID of the process listening on 127.0.0.1:port. Returns -1 if none."""
+    import platform
+    port = int(port)
+    system = platform.system()
+
+    try:
+        if system == "Windows":
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                # Match lines like:  TCP    127.0.0.1:9444    0.0.0.0:0    LISTENING    12345
+                parts = line.split()
+                if len(parts) >= 5 and parts[0] == "TCP" and "LISTENING" in parts:
+                    addr = parts[1]
+                    if addr == f"127.0.0.1:{port}":
+                        pid = int(parts[-1])
+                        return pid
+        else:
+            # Linux / macOS: use lsof
+            result = subprocess.run(
+                ["lsof", "-i", f"TCP@127.0.0.1:{port}", "-t", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=5
+            )
+            pids = result.stdout.strip().splitlines()
+            if pids:
+                return int(pids[0])
+    except Exception as e:
+        logger.error(f"Failed to detect PID on port {port}: {e}")
+
+    return -1
+
+
+def kill_pid(pid: int) -> bool:
+    """Kill a process by PID. Returns True if successful."""
+    import signal
+    pid = int(pid)
+    if pid <= 0:
+        return False
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        logger.info(f"Sent SIGTERM to PID {pid}")
+        return True
+    except ProcessLookupError:
+        logger.warning(f"PID {pid} not found (already dead)")
+        return True
+    except PermissionError:
+        logger.error(f"Permission denied killing PID {pid}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to kill PID {pid}: {e}")
+        return False
+
+
 def run_cmd(cmd: list):
     # uses POpen to run command and yield output line by line in real time
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

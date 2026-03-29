@@ -255,6 +255,22 @@ hr {
     opacity: 0.7;
 }
 
+.sidebar-session-item.starting {
+    border-left-color: var(--accent);
+    opacity: 0.7;
+}
+
+.sidebar-session-item.stopping {
+    border-left-color: var(--success);
+    opacity: 0.5;
+}
+
+.sidebar-session-top {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
 .sidebar-session-name {
     font-size: 0.85em;
     font-weight: 500;
@@ -262,6 +278,52 @@ hr {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
+
+.sidebar-session-actions {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.sidebar-session-item:hover .sidebar-session-actions {
+    opacity: 1;
+}
+
+.sidebar-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.6em;
+    color: var(--inactive-text);
+    transition: background 0.15s, color 0.15s;
+}
+.sidebar-action-btn:hover {
+    background: var(--highlight-bg-light);
+    color: var(--text);
+}
+
+/* Power button colors */
+.sidebar-power-btn.on .fa-power-off { color: var(--success); }
+.sidebar-power-btn.on:hover .fa-power-off { color: var(--error-border); }
+.sidebar-power-btn.off .fa-power-off { color: var(--inactive-text); }
+.sidebar-power-btn.off:hover .fa-power-off { color: var(--success); }
+.sidebar-power-btn .fa-spinner { color: var(--accent); }
+.sidebar-session-item.stopping .sidebar-power-btn .fa-spinner { color: var(--success); }
+
+/* Nuke button */
+.sidebar-nuke-btn:hover {
+    color: var(--error-border);
+    background: rgba(211, 47, 47, 0.12);
 }
 
 .sidebar-session-detail {
@@ -331,6 +393,67 @@ hr {
     flex-direction: column;
     gap: 12px;
     padding: 16px 0;
+}
+
+/* --- Dashboard statistics cards --- */
+
+.dashboard-stats {
+    display: flex;
+    gap: 8px;
+}
+
+.stat-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 8px;
+    background: var(--highlight-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-width: 0;
+}
+
+.stat-value {
+    font-size: 1.3em;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.2;
+}
+
+.stat-label {
+    font-size: 0.65em;
+    font-weight: 500;
+    color: var(--inactive-text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 2px;
+}
+
+/* Color accents for key stats */
+.stat-card:first-child .stat-value {
+    color: var(--success);
+}
+.stat-card:nth-child(4) .stat-value {
+    color: var(--error-border);
+}
+
+/* --- Session stopping state --- */
+
+/* Starting: spinner, accent tint */
+.session-item.starting {
+    opacity: 0.7;
+    border-color: var(--accent);
+}
+.session-item.starting .session-shutdown,
+.session-item.stopping .session-shutdown {
+    pointer-events: none;
+}
+
+/* Stopping: spinner + green border (still active) */
+.session-item.stopping {
+    opacity: 0.6;
+    border-color: var(--success);
 }
 
 .dashboard-toolbar {
@@ -486,6 +609,136 @@ hr {
     gap: 8px;
 }
 
+/* --- Console panel --- */
+
+.console-panel {
+    border-top: 2px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    height: 180px;
+    flex-shrink: 0;
+}
+
+.console-header {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.console-header .conn-action-btn {
+    margin-left: auto;
+    margin-right: 6px;
+    flex-shrink: 0;
+}
+
+.console-tabs {
+    display: flex;
+    gap: 0;
+    overflow-x: auto;
+    flex: 1;
+    min-width: 0;
+}
+
+.console-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 0.72em;
+    font-weight: 500;
+    color: var(--inactive-text);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+}
+.console-tab:hover {
+    color: var(--text);
+}
+.console-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.console-tab-close {
+    display: flex;
+    align-items: center;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.8em;
+    opacity: 0.5;
+    padding: 0;
+    margin-left: 2px;
+}
+.console-tab-close:hover {
+    opacity: 1;
+    color: var(--error-border);
+}
+
+.console-tab-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.console-tab-dot.active { background: var(--success); }
+.console-tab-dot.error { background: var(--error-border); }
+.console-tab-dot.starting { background: var(--accent); }
+.console-tab-dot.inactive { background: var(--inactive-text); }
+
+.console-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.7em;
+    line-height: 1.5;
+    background: var(--primary-bg);
+}
+
+.console-empty {
+    color: var(--inactive-text);
+    opacity: 0.5;
+    padding: 12px;
+    text-align: center;
+    font-family: inherit;
+}
+
+.console-line {
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.console-line.stdout {
+    color: var(--text);
+}
+.console-line.stderr {
+    color: var(--error-border);
+}
+.console-line.frontend {
+    color: var(--accent);
+}
+.console-line.system {
+    color: var(--inactive-text);
+    font-style: italic;
+}
+
+.console-prefix {
+    opacity: 0.4;
+    user-select: all;
+}
+
+/* --- UI lock overlay (while tunnel starting) --- */
+
+.tunnel-lock {
+    pointer-events: none;
+    opacity: 0.5;
+}
+
 .session-item {
     display: flex;
     flex-direction: column;
@@ -554,6 +807,30 @@ hr {
     font-size: 0.8em;
     color: var(--inactive-text);
     font-family: 'Inter', monospace;
+}
+
+.port-kill-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--inactive-text);
+    cursor: pointer;
+    font-size: 0.65em;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.session-item:hover .port-kill-btn {
+    opacity: 0.6;
+}
+.port-kill-btn:hover {
+    opacity: 1 !important;
+    color: var(--error-border);
+    background: rgba(211, 47, 47, 0.12);
 }
 
 .session-region {
@@ -683,6 +960,7 @@ hr {
 .main-content-body {
     width: 100%;
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     padding: 56px 32px 0 32px;
@@ -994,6 +1272,40 @@ hr {
     opacity: 0.7;
 }
 
+.settings-group-heading {
+    font-size: 0.7em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--inactive-text);
+    grid-column: 1 / -1;
+}
+
+.settings-group-divider {
+    grid-column: 1 / -1;
+    border-bottom: 1px solid var(--border);
+    margin: 4px 0;
+}
+
+.setting-path-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.setting-path-row .form-input {
+    flex: 1;
+}
+.setting-browse-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 0.85em;
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+.setting-browse-btn:hover {
+    opacity: 1;
+}
+
 .form-actions {
     display: flex;
     gap: 8px;
@@ -1102,18 +1414,6 @@ hr {
     color: var(--error-border);
 }
 
-.form-success {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    background: rgba(34, 197, 94, 0.1);
-    border: 1px solid rgba(34, 197, 94, 0.3);
-    border-radius: 6px;
-    font-size: 0.8em;
-    color: var(--success);
-}
-
 /* --- Edit mode badge --- */
 
 .edit-badge {
@@ -1145,18 +1445,82 @@ hr {
     border-style: dashed;
 }
 
-/* --- Form warnings (non-fatal) --- */
+/* --- Advanced page --- */
 
-.form-warning {
+.advanced-section {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.advanced-section:last-child {
+    border-bottom: none;
+}
+
+.advanced-section-title {
+    font-size: 0.9em;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
-    background: rgba(234, 179, 8, 0.1);
-    border: 1px solid rgba(234, 179, 8, 0.3);
-    border-radius: 6px;
+}
+.advanced-section-title i {
+    color: var(--accent);
+}
+
+.advanced-section-desc {
+    font-size: 0.75em;
+    color: var(--inactive-text);
+    margin-bottom: 10px;
+}
+
+.nuke-port-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.nuke-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--highlight-bg);
+    color: var(--text);
+    font-size: 0.75em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+.nuke-chip:hover {
+    border-color: var(--error-border);
+    background: rgba(211, 47, 47, 0.1);
+    color: var(--error-border);
+}
+.nuke-chip i {
     font-size: 0.8em;
-    color: var(--warning);
+}
+
+.nuke-port-custom {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.nuke-port-custom .form-input {
+    width: 120px;
+}
+
+.replace-config-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.replace-config-row .form-input {
+    flex: 1;
 }
 
 /* --- Import page --- */
@@ -1297,7 +1661,7 @@ hr {
     display: flex;
     flex-direction: column-reverse;
     gap: 6px;
-    z-index: 20;
+    z-index: 100;
     pointer-events: none;
     max-width: 340px;
 }

@@ -1,0 +1,40 @@
+<div class="form-container">
+    <div class="form-title">
+        <i class="fa-solid fa-flask"></i>
+        <span>Advanced</span>
+    </div>
+
+    <div class="advanced-section">
+        <div class="advanced-section-title">
+            <i class="fa-solid fa-skull-crossbones"></i> Nuke Port
+        </div>
+        <div class="advanced-section-desc">Force kill any process listening on a port. Select from active ports or enter a custom one.</div>
+        <div class="nuke-port-chips" id="nukePortChips"></div>
+        <div class="nuke-port-custom">
+            <input class="form-input" id="nukePortInput" type="number" min="1" max="65535" placeholder="Custom port" />
+            <button class="conn-btn primary" id="nukePortBtn">
+                <i class="fa-solid fa-skull-crossbones"></i> Nuke
+            </button>
+        </div>
+        <div id="nukePortMessage"></div>
+    </div>
+
+    <div class="advanced-section">
+        <div class="advanced-section-title">
+            <i class="fa-solid fa-file-import"></i> Replace All Configs
+        </div>
+        <div class="advanced-section-desc">Replace the kubeconfig used by all user connections with a new path.</div>
+        <div class="replace-config-row">
+            <input class="form-input" id="replaceConfigPath" type="text" />
+            <button class="conn-action-btn setting-browse-btn" id="replaceConfigBrowse" title="Browse">
+                <i class="fa-solid fa-folder-open"></i>
+            </button>
+        </div>
+        <div class="form-actions" style="justify-content: flex-start">
+            <button class="conn-btn primary" id="replaceConfigBtn">
+                <i class="fa-solid fa-arrows-rotate"></i> Replace All
+            </button>
+        </div>
+        <div id="replaceConfigMessage"></div>
+    </div>
+</div>

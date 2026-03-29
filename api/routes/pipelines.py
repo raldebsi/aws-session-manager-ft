@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
 from src.utils.kube import k8s_health_check, start_eks_tunnel
 from src.utils.data_loaders import load_user_config, load_connections
+from src.utils.utils import get_pid_on_port, kill_pid
 from src.models.config import SSMUserConfig, SSMConnectionConfig
 
 pipelines_bp = Blueprint("pipelines", __name__, url_prefix="/api/pipelines")
@@ -94,7 +95,7 @@ def full_connect():
 
     # --- Step 4: Verify Kubernetes connectivity ---
     try:
-        health = k8s_health_check()
+        health = k8s_health_check(kubeconfig_path=mapped.kubeconfig_path)
         if health:
             steps.append({"step": "verify_k8s", "status": "ok"})
         else:
@@ -135,3 +136,25 @@ def full_disconnect():
 
     tunnel_manager.stop_tunnel(tunnel_id)
     return jsonify({"tunnel_id": tunnel_id, "status": "stop_requested"})
+
+
+@pipelines_bp.route("/kill-port", methods=["POST"])
+def kill_by_port():
+    """Detect what's running on 127.0.0.1:port and kill it.
+
+    Body: {"port": 9444}
+    """
+    data = request.get_json(force=True)
+    port = data.get("port")
+    if not port:
+        return jsonify({"error": "port is required"}), 400
+
+    port = int(port)
+    pid = get_pid_on_port(port)
+    if pid == -1:
+        return jsonify({"port": port, "pid": -1, "message": "Nothing listening on this port"})
+
+    killed = kill_pid(pid)
+    if killed:
+        return jsonify({"port": port, "pid": pid, "killed": True})
+    return jsonify({"port": port, "pid": pid, "killed": False, "error": "Failed to kill process"}), 500

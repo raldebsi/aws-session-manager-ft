@@ -8,6 +8,8 @@ from api.routes.consts import consts_bp
 from api.routes.hosts import hosts_bp
 from api.routes.kube import kube_bp
 from api.routes.pages import pages_bp
+from api.routes.sessions import sessions_bp
+from api.routes.settings import settings_bp
 from api.routes.tunnels import tunnels_bp
 from api.routes.pipelines import pipelines_bp
 
@@ -29,6 +31,8 @@ def create_app():
     app.register_blueprint(hosts_bp)
     app.register_blueprint(kube_bp)
     app.register_blueprint(pages_bp)
+    app.register_blueprint(sessions_bp)
+    app.register_blueprint(settings_bp)
     app.register_blueprint(tunnels_bp)
     app.register_blueprint(pipelines_bp)
 
