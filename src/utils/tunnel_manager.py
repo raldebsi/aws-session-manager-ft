@@ -23,8 +23,9 @@ class Tunnel(TypedDict):
     connection_id: str
     process: Optional[ManagedProcess]
     state: TunnelState
-    logs: list            # unified log entries: {"ts": float, "type": str, "text": str}
+    logs: list            # unified log entries: {"ts": float, "type": str, "text": str, "ci": int}
     log_lock: threading.Lock
+    connection_index: int  # increments on each reconnect
 
 class SSMTunnelManager:
     """
@@ -82,6 +83,7 @@ class SSMTunnelManager:
                 "ts": ts,
                 "type": log_type,
                 "text": text,
+                "ci": tunnel['connection_index'],
             })
 
     def append_log(self, tunnel_id, log_type, text, ts=None):
@@ -138,6 +140,7 @@ class SSMTunnelManager:
                 # Dead tunnel exists — clean up and reuse
                 logger.info(f"[{tunnel_id}] Reusing dead tunnel entry (previous state: {state}).")
                 self._cleanup_dead_tunnel(tunnel_id)
+                existing['connection_index'] = existing.get('connection_index', 0) + 1
                 self._append_log(tunnel_id, 'system', '--- Reconnected ---')
                 existing['state'] = TunnelState.STARTING
                 existing['thread'] = threading.Thread(target=tunnel_thread, daemon=True)
@@ -151,6 +154,7 @@ class SSMTunnelManager:
                     'state': TunnelState.STARTING,
                     'logs': [],
                     'log_lock': threading.Lock(),
+                    'connection_index': 0,
                 }
                 thread.start()
 
@@ -220,6 +224,7 @@ class SSMTunnelManager:
                 "thread_id": tunnel['thread'].ident if tunnel['thread'] else None,
                 "thread_alive": tunnel['thread'].is_alive() if tunnel['thread'] else None,
                 "state": tunnel['state'].value if tunnel['state'] else None,
+                "connection_index": tunnel.get('connection_index', 0),
             }
 
     def shutdown_all_tunnels(self, sig=None, frame=None):
@@ -281,6 +286,6 @@ class SSMTunnelManager:
         with self._lock:
             tunnel = self.tunnels.get(tunnel_id)
             if not tunnel:
-                return None
+                return None, None
             with tunnel['log_lock']:
-                return list(tunnel['logs'])
+                return list(tunnel['logs']), tunnel.get('connection_index', 0)

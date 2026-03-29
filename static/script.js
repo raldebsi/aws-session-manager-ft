@@ -418,7 +418,12 @@ async function connectSession(session) {
             const logsRes = await fetch(`/api/tunnels/${tunnelId}/logs`);
             if (logsRes.ok) {
                 const logsData = await logsRes.json();
-                for (const entry of logsData.logs || []) {
+                const ci = logsData.connection_index;
+                // Search from the end — "Waiting for connections" is always near the tail
+                const logs = logsData.logs || [];
+                for (let j = logs.length - 1; j >= 0; j--) {
+                    const entry = logs[j];
+                    if (entry.ci !== ci) break; // hit older connection's entries, stop
                     if (entry.type === 'stdout' && entry.text.includes('Waiting for connections')) {
                         ready = true;
                         break;

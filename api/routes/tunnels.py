@@ -106,11 +106,11 @@ def stop_tunnel(tunnel_id):
 
 @tunnels_bp.route("/<path:tunnel_id>/logs", methods=["GET"])
 def tunnel_logs(tunnel_id):
-    """Get unified log entries from a tunnel. Each entry: {ts, type, text}."""
-    logs = tunnel_manager.get_logs(tunnel_id)
+    """Get unified log entries from a tunnel. Each entry: {ts, type, text, ci}."""
+    logs, connection_index = tunnel_manager.get_logs(tunnel_id)
     if logs is None:
         return jsonify({"error": f"Tunnel '{tunnel_id}' not found"}), 404
-    return jsonify({"tunnel_id": tunnel_id, "logs": logs})
+    return jsonify({"tunnel_id": tunnel_id, "logs": logs, "connection_index": connection_index})
 
 
 @tunnels_bp.route("/<path:tunnel_id>/logs", methods=["POST"])
@@ -134,7 +134,7 @@ def save_tunnel_logs(tunnel_id):
     """Save backend tunnel logs via native folder picker. Returns folder + prefix for client to save its own file."""
     from datetime import datetime
 
-    logs = tunnel_manager.get_logs(tunnel_id)
+    logs, _ = tunnel_manager.get_logs(tunnel_id)
     if logs is None:
         return jsonify({"error": f"Tunnel '{tunnel_id}' not found"}), 404
 
