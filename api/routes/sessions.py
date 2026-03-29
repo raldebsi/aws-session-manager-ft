@@ -1,10 +1,24 @@
-from flask import Blueprint, jsonify
+import psutil
+from flask import Blueprint, jsonify, request
 
 from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
 from src.utils.data_loaders import load_user_config, load_connections
+from src.utils.kube import k8s_health_check, get_k8s_nodes
 from src.utils.utils import get_pid_on_port
 
 sessions_bp = Blueprint("sessions", __name__, url_prefix="/api/sessions")
+
+
+def _is_owned_pid(our_pid, port_pid):
+    """Check if port_pid is our process or any of its descendants."""
+    if our_pid == port_pid:
+        return True
+    try:
+        parent = psutil.Process(our_pid)
+        children_pids = {c.pid for c in parent.children(recursive=True)}
+        return port_pid in children_pids
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
 
 
 def _build_sessions():
@@ -46,7 +60,7 @@ def _build_sessions():
             if pid > 0:
                 # Check if this PID belongs to our tunnel's process
                 our_pid = tunnel_info.get("process_id") if tunnel_info else None
-                if our_pid and our_pid == pid:
+                if our_pid and _is_owned_pid(our_pid, pid):
                     pass  # Stale state — our process is still alive but tunnel state is wrong
                 else:
                     status = "port_conflict"
@@ -102,3 +116,75 @@ def get_stats():
         "regions": len(regions),
         "ports_in_use": len(ports_in_use),
     })
+
+
+@sessions_bp.route("/<connection_key>/health", methods=["GET"])
+def check_health(connection_key):
+    """Check health of a session's port, k8s, and/or tunnel.
+    Query param ?check=port|k8s|tunnel to check a single indicator, omit for all."""
+    check = request.args.get("check")
+
+    user_config = load_user_config(USER_CONFIG_PATH)
+    uc = user_config.connections.get(connection_key)
+    if not uc:
+        return jsonify({"error": "Session not found"}), 404
+
+    tunnel_info = tunnel_manager.get_tunnel_info(connection_key)
+    our_pid = tunnel_info.get("process_id") if tunnel_info else None
+    tunnel_state = tunnel_info.get("state") if tunnel_info else None
+
+    result = {}
+
+    # --- Port health ---
+    if not check or check == "port":
+        pid = get_pid_on_port(uc.local_port)
+        if pid <= 0:
+            if tunnel_state in ("starting", "running"):
+                result["port"] = {"status": "red", "detail": "Port not listening but tunnel reports active"}
+            else:
+                result["port"] = {"status": "blue", "detail": "Port available"}
+        elif our_pid and _is_owned_pid(our_pid, pid):
+            result["port"] = {"status": "green", "detail": f"Owned by tunnel (PID {pid})"}
+        else:
+            result["port"] = {"status": "orange", "detail": f"External process (PID {pid})"}
+
+    # --- K8s health ---
+    if not check or check == "k8s":
+        connections = load_connections(CONNECTIONS_CONFIG_PATH)
+        try:
+            mapped = uc.map_to_connection(connections)
+        except KeyError:
+            mapped = None
+        kubeconfig_path = mapped.kubeconfig_path if mapped else None
+        context = connection_key  # connection key is used as kubeconfig context alias
+
+        try:
+            healthy, health_output = k8s_health_check(context=context, kubeconfig_path=kubeconfig_path)
+        except Exception:
+            healthy = False
+            health_output = ""
+
+        if healthy:
+            result["k8s"] = {"status": "green", "detail": "Health check passed"}
+        else:
+            try:
+                nodes = get_k8s_nodes(context=context, kubeconfig_path=kubeconfig_path)
+                if nodes:
+                    result["k8s"] = {"status": "orange", "detail": f"Healthz failed but {len(nodes)} node(s) reachable", "output": health_output}
+                else:
+                    result["k8s"] = {"status": "red", "detail": "Unreachable"}
+            except Exception:
+                result["k8s"] = {"status": "red", "detail": "Unreachable"}
+
+    # --- Tunnel health ---
+    if not check or check == "tunnel":
+        if not tunnel_info or not tunnel_state:
+            result["tunnel"] = {"status": "blue", "detail": "No tunnel"}
+        elif tunnel_state in ("starting", "running"):
+            result["tunnel"] = {"status": "green", "detail": tunnel_state.capitalize()}
+        elif tunnel_state == "error":
+            result["tunnel"] = {"status": "red", "detail": "Tunnel error"}
+        else:
+            result["tunnel"] = {"status": "red", "detail": tunnel_state}
+
+    return jsonify(result)

@@ -1,5 +1,6 @@
 from enum import Enum
 import signal
+import time
 import threading
 from typing import Optional, TypedDict, Union
 from src.utils.managed_process import ManagedProcess
@@ -22,8 +23,8 @@ class Tunnel(TypedDict):
     connection_id: str
     process: Optional[ManagedProcess]
     state: TunnelState
-    stdout: list
-    stderr: list
+    logs: list            # unified log entries: {"ts": float, "type": str, "text": str}
+    log_lock: threading.Lock
 
 class SSMTunnelManager:
     """
@@ -70,14 +71,29 @@ class SSMTunnelManager:
         tunnel['process'] = None
         tunnel['thread'] = None
 
+    def _append_log(self, tunnel_id, log_type, text, ts=None):
+        """Thread-safe append of a structured log entry. Generates ts if not provided."""
+        ts = ts if ts is not None else time.time()
+        tunnel = self.tunnels.get(tunnel_id)
+        if not tunnel:
+            return
+        with tunnel['log_lock']:
+            tunnel['logs'].append({
+                "ts": ts,
+                "type": log_type,
+                "text": text,
+            })
+
+    def append_log(self, tunnel_id, log_type, text, ts=None):
+        """Public interface for appending external log entries (e.g. frontend/client logs)."""
+        self._append_log(tunnel_id, log_type, text, ts=ts)
+
     def start_tunnel(self, connection_id, *cmd):
         tunnel_id = connection_id
 
         def tunnel_thread():
-            stdout_log = self.tunnels[tunnel_id]['stdout']
-            stderr_log = self.tunnels[tunnel_id]['stderr']
             try:
-                with ManagedProcess(cmd, output=stdout_log, errors=stderr_log) as mp:
+                with ManagedProcess(cmd) as mp:
                     logger.info(f"[{tunnel_id}] Tunnel process started with PID {mp.pid}")
                     self.register_process(tunnel_id, mp)
 
@@ -85,6 +101,7 @@ class SSMTunnelManager:
                         self.update_tunnel_state(tunnel_id, 'running')
                         for line in stream_iter:
                             line = line.strip()
+                            self._append_log(tunnel_id, stream_name, line)
                             logger.info(f"[{tunnel_id}][{stream_name}] {line}")
                             if self._shutdown_flag.is_set() and mp.returncode is None:
                                 self.update_tunnel_state(tunnel_id, "app-shutting-down")
@@ -121,7 +138,7 @@ class SSMTunnelManager:
                 # Dead tunnel exists — clean up and reuse
                 logger.info(f"[{tunnel_id}] Reusing dead tunnel entry (previous state: {state}).")
                 self._cleanup_dead_tunnel(tunnel_id)
-                existing['stdout'].append("--- Reconnected ---")
+                self._append_log(tunnel_id, 'system', '--- Reconnected ---')
                 existing['state'] = TunnelState.STARTING
                 existing['thread'] = threading.Thread(target=tunnel_thread, daemon=True)
                 existing['thread'].start()
@@ -132,8 +149,8 @@ class SSMTunnelManager:
                     'connection_id': connection_id,
                     'process': None,
                     'state': TunnelState.STARTING,
-                    'stdout': [],
-                    'stderr': [],
+                    'logs': [],
+                    'log_lock': threading.Lock(),
                 }
                 thread.start()
 
@@ -259,23 +276,11 @@ class SSMTunnelManager:
                     else:
                         logger.info(f"[{tunnel_id}] Tunnel thread joined successfully.")
 
-    def get_output(self, tunnel_id):
-        return self.get_output_stream(tunnel_id, 'stdout')
-
-    def get_errors(self, tunnel_id):
-        return self.get_output_stream(tunnel_id, 'stderr')
-        
-    def get_output_stream(self, tunnel_id, stream_name):
+    def get_logs(self, tunnel_id):
+        """Return the unified log list for a tunnel."""
         with self._lock:
             tunnel = self.tunnels.get(tunnel_id)
             if not tunnel:
-                logger.warning(f"[{tunnel_id}] Attempted to get output stream for non-existent tunnel.")
                 return None
-
-            if stream_name == 'stdout':
-                return tunnel.get('stdout', [])
-            elif stream_name == 'stderr':
-                return tunnel.get('stderr', [])
-            else:
-                logger.error(f"[{tunnel_id}] Invalid stream name '{stream_name}' requested.")
-                return None
+            with tunnel['log_lock']:
+                return list(tunnel['logs'])

@@ -38,11 +38,11 @@ def health_check():
     try:
         context = request.args.get("context") or None
         kubeconfig_path = request.args.get("kubeconfig_path") or None
-        healthy = k8s_health_check(context=context, kubeconfig_path=kubeconfig_path)
+        healthy, health_out = k8s_health_check(context=context, kubeconfig_path=kubeconfig_path)
         if healthy:
             return jsonify({"status": "ok"})
         else:
-            return jsonify({"status": "unhealthy", "message": "Kubernetes health check failed"}), 503
+            return jsonify({"status": "unhealthy", "message": "Kubernetes health check failed", "output": health_out}), 503
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

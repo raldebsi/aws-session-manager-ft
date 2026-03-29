@@ -46,6 +46,9 @@
                         <i class="fa-solid fa-tower-broadcast sessions-group-icon active"></i>
                         Active Sessions
                         <span class="sessions-count" id="activeCount">0</span>
+                        <button class="sidebar-refresh-all-btn" id="refreshAllBtn" title="Refresh all sessions">
+                            <i class="fa-solid fa-arrows-rotate"></i>
+                        </button>
                     </div>
                     <div class="sidebar-session-list" id="activeSessions">
                         <!-- Active sessions will be moved here by JS -->
@@ -76,7 +79,11 @@
             <div class="console-panel" id="consolePanel" style="display:none">
                 <div class="console-header">
                     <div class="console-tabs" id="consoleTabs"></div>
-                    <button class="conn-action-btn" id="consoleCopyBtn" title="Copy logs"><i class="fa-solid fa-copy"></i></button>
+                    <div class="console-actions">
+                        <button class="conn-action-btn" id="consoleRefreshBtn" title="Refresh logs"><i class="fa-solid fa-arrows-rotate"></i></button>
+                        <button class="conn-action-btn" id="consoleSaveBtn" title="Save logs"><i class="fa-solid fa-floppy-disk"></i></button>
+                        <button class="conn-action-btn" id="consoleCopyBtn" title="Copy logs"><i class="fa-solid fa-copy"></i></button>
+                    </div>
                 </div>
                 <div class="console-body" id="consoleBody">
                     <div class="console-empty">No session selected</div>

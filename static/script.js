@@ -139,6 +139,64 @@ document.querySelectorAll('.sidebar-pane').forEach(pane => {
 
 let tunnelBusy = false; // UI lock: true while any tunnel is starting
 
+// Health state per session key: { port: {status, detail}, k8s: {status, detail}, tunnel: {status, detail} }
+const sessionHealth = {};
+const sessionChecking = {}; // per-key lock: true while a health check is in flight
+
+function getHealth(key) {
+    return sessionHealth[key] || null;
+}
+
+function isChecking(key) {
+    return !!sessionChecking[key];
+}
+
+function resetHealth(key) {
+    delete sessionHealth[key];
+}
+
+function setHealth(key, indicator, status, detail) {
+    if (!sessionHealth[key]) sessionHealth[key] = {};
+    sessionHealth[key][indicator] = { status, detail };
+}
+
+function indicatorStatus(health, indicator) {
+    if (!health || !health[indicator]) return 'neutral';
+    return health[indicator].status;
+}
+
+function indicatorDetail(health, indicator) {
+    if (!health || !health[indicator]) return 'Not checked';
+    return health[indicator].detail;
+}
+
+async function checkSessionHealth(key, check = null) {
+    sessionChecking[key] = true;
+    renderAll();
+    const params = check ? `?check=${check}` : '';
+    try {
+        const res = await fetch(`/api/sessions/${key}/health${params}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!sessionHealth[key]) sessionHealth[key] = {};
+        Object.assign(sessionHealth[key], data);
+        return data;
+    } catch { return null; }
+    finally {
+        delete sessionChecking[key];
+    }
+}
+
+async function refreshAllHealth() {
+    const btn = document.getElementById('refreshAllBtn');
+    if (btn) btn.classList.add('spinning');
+    await fetchSessions();
+    const active = sessions.filter(s => isActive(s));
+    await Promise.all(active.map(s => checkSessionHealth(s.key)));
+    renderAll();
+    if (btn) btn.classList.remove('spinning');
+}
+
 async function fetchSessions() {
     const res = await fetch('/api/sessions');
     sessions = await res.json();
@@ -206,6 +264,7 @@ async function disconnectSession(session) {
     }
 
     session.status = 'stopping';
+    resetHealth(key);
     renderAll();
     openConsoleTab(key);
 
@@ -356,11 +415,11 @@ async function connectSession(session) {
             await sleep(pollMs);
             await fetchAndAppendLogs(key);
 
-            const outputRes = await fetch(`/api/tunnels/${tunnelId}/output`);
-            if (outputRes.ok) {
-                const outputData = await outputRes.json();
-                for (const line of outputData.output || []) {
-                    if (line.includes('Waiting for connections')) {
+            const logsRes = await fetch(`/api/tunnels/${tunnelId}/logs`);
+            if (logsRes.ok) {
+                const logsData = await logsRes.json();
+                for (const entry of logsData.logs || []) {
+                    if (entry.type === 'stdout' && entry.text.includes('Waiting for connections')) {
                         ready = true;
                         break;
                     }
@@ -376,23 +435,35 @@ async function connectSession(session) {
             logFrontend(key, 'Tunnel is ready');
         }
 
-        // Non-blocking: K8s health check
+        // K8s health check — capture result into health indicators
         logFrontend(key, 'Verifying Kubernetes connectivity...');
         try {
-            const healthParams = mapped.kubeconfig_path ? `?kubeconfig_path=${encodeURIComponent(mapped.kubeconfig_path)}` : '';
-            const healthRes = await fetch(`/api/kube/health${healthParams}`);
+            const healthQuery = new URLSearchParams();
+            if (mapped.kubeconfig_path) healthQuery.set('kubeconfig_path', mapped.kubeconfig_path);
+            healthQuery.set('context', key);
+            console.log(`Checking K8s health with query: ${healthQuery.toString()}`);
+            const healthRes = await fetch(`/api/kube/health?${healthQuery}`);
             const healthData = await healthRes.json();
             if (healthData.status === 'ok') {
                 logFrontend(key, 'Kubernetes health check passed');
+                setHealth(key, 'k8s', 'green', 'Health check passed');
             } else {
                 logFrontend(key, `WARNING: K8s health: ${healthData.message || 'unhealthy'}`);
+                setHealth(key, 'k8s', 'red', healthData.message || 'Unhealthy');
             }
         } catch {
             logFrontend(key, 'WARNING: K8s health check failed (non-critical)');
+            setHealth(key, 'k8s', 'red', 'Health check failed');
         }
 
         logSystem(key, '\u2014 Connected successfully \u2014');
         showToast(`Connected "${session.name}"`, 'success');
+
+        // Auto-check port + tunnel health (non-blocking)
+        Promise.all([
+            checkSessionHealth(key, 'port'),
+            checkSessionHealth(key, 'tunnel'),
+        ]).then(() => renderAll());
 
     } catch (err) {
         logFrontend(key, `FAILED: ${err.message}`);
@@ -413,33 +484,18 @@ async function fetchAndAppendLogs(key) {
         const tab = consoleTabs[key];
         if (!tab) return;
 
-        // Track how many backend lines we've already ingested
-        if (!tab._lastStdout) tab._lastStdout = 0;
-        if (!tab._lastStderr) tab._lastStderr = 0;
+        if (!tab._lastLogCount) tab._lastLogCount = 0;
 
-        const [stdoutRes, stderrRes] = await Promise.all([
-            fetch(`/api/tunnels/${tunnelId}/output`),
-            fetch(`/api/tunnels/${tunnelId}/errors`),
-        ]);
+        const res = await fetch(`/api/tunnels/${tunnelId}/logs`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const allLogs = data.logs || [];
+        const newEntries = allLogs.slice(tab._lastLogCount);
+        tab._lastLogCount = allLogs.length;
 
-        let newStdout = [], newStderr = [];
-        if (stdoutRes.ok) {
-            const data = await stdoutRes.json();
-            const allStdout = data.output || [];
-            newStdout = allStdout.slice(tab._lastStdout);
-            tab._lastStdout = allStdout.length;
-        }
-        if (stderrRes.ok) {
-            const data = await stderrRes.json();
-            const allStderr = data.errors || [];
-            newStderr = allStderr.slice(tab._lastStderr);
-            tab._lastStderr = allStderr.length;
-        }
+        newEntries.forEach(entry => appendLog(tab, { stream: entry.type, text: entry.text }));
 
-        newStdout.forEach(line => appendLog(tab, { stream: 'stdout', text: line }));
-        newStderr.forEach(line => appendLog(tab, { stream: 'stderr', text: line }));
-
-        if ((newStdout.length || newStderr.length) && activeConsoleKey === key) {
+        if (newEntries.length && activeConsoleKey === key) {
             refreshConsoleBody();
         }
     } catch { /* non-critical */ }
@@ -598,6 +654,22 @@ function renderFlatView(container, filtered) {
     container.appendChild(grid);
 }
 
+function healthIndicatorsHtml(session) {
+    const h = getHealth(session.key);
+    const items = [
+        { key: 'k8s',    icon: 'fa-dharmachakra', label: 'K8s' },
+        { key: 'port',   icon: 'fa-plug',         label: 'Port' },
+        { key: 'tunnel', icon: 'fa-link',          label: 'Tunnel' },
+    ];
+    return items.map(i => {
+        const st = indicatorStatus(h, i.key);
+        const detail = indicatorDetail(h, i.key);
+        return `<span class="health-dot health-${st}" data-check="${i.key}" data-key="${session.key}" title="${i.label}: ${detail}">
+            <i class="fa-solid ${i.icon}"></i>
+        </span>`;
+    }).join('');
+}
+
 function sessionIcon(session) {
     if (session.status === 'starting') return 'fa-spinner fa-spin';
     if (session.status === 'stopping') return 'fa-spinner fa-spin';
@@ -627,8 +699,10 @@ function createDashboardCard(session) {
     const isOn = btnClass === 'on';
     const isConflict = isPortConflict(session);
 
+    const checking = isChecking(session.key);
+    const locked = isConflict || checking || isBusy(session);
     const btnTitle = isConflict ? `Port ${session.localPort} in use by PID ${session.portPid}` : (isOn ? 'Disconnect' : 'Connect');
-    const btnDisabled = isConflict ? 'disabled' : '';
+    const btnDisabled = locked ? 'disabled' : '';
     const conflictWarning = isConflict
         ? `<div class="session-conflict-warning"><i class="fa-solid fa-triangle-exclamation"></i> Port in use by external process (PID ${session.portPid})</div>`
         : '';
@@ -644,15 +718,23 @@ function createDashboardCard(session) {
                     <span class="session-type-badge">${session.type}</span>
                 </div>
             </div>
-            <button class="session-btn session-shutdown ${btnClass}" title="${btnTitle}" ${btnDisabled}>
-                <span class="shutdown-icon">
-                    <i class="fa-solid ${btnIcon}"></i>
-                </span>
-            </button>
+            <div class="session-actions">
+                <button class="session-btn session-refresh-btn ${checking ? 'spinning' : ''}" title="Refresh health" ${checking ? 'disabled' : ''}>
+                    <i class="fa-solid fa-arrows-rotate"></i>
+                </button>
+                <button class="session-btn session-shutdown ${btnClass}" title="${btnTitle}" ${btnDisabled}>
+                    <span class="shutdown-icon">
+                        <i class="fa-solid ${btnIcon}"></i>
+                    </span>
+                </button>
+            </div>
         </div>
         ${conflictWarning}
         <div class="session-bottom">
-            <span class="session-ports">${session.localPort} &rarr; <span class="session-region">${session.region}</span>:${session.remotePort}</span>
+            <div class="session-bottom-left">
+                <span class="session-ports">${session.localPort} &rarr; <span class="session-region">${session.region}</span>:${session.remotePort}</span>
+                <div class="session-health">${healthIndicatorsHtml(session)}</div>
+            </div>
             <button class="port-kill-btn" title="Force kill process on port ${session.localPort}">
                 <i class="fa-solid fa-skull-crossbones"></i>
             </button>
@@ -662,6 +744,22 @@ function createDashboardCard(session) {
     el.querySelector('.session-shutdown').addEventListener('click', (e) => {
         e.stopPropagation();
         toggleSession(session);
+    });
+
+    el.querySelector('.session-refresh-btn').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (isChecking(session.key)) return;
+        await checkSessionHealth(session.key);
+        renderAll();
+    });
+
+    el.querySelectorAll('.health-dot').forEach(dot => {
+        dot.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (isChecking(session.key)) return;
+            await checkSessionHealth(session.key, dot.dataset.check);
+            renderAll();
+        });
     });
 
     el.querySelector('.port-kill-btn').addEventListener('click', (e) => {
@@ -677,13 +775,13 @@ function createDashboardCard(session) {
 
 // === CONSOLE PANEL ===
 
-// Each tab: { open, logs: [{stream, text}], _lastStdout, _lastStderr }
+// Each tab: { open, logs: [{stream, text}], _lastLogCount }
 const consoleTabs = {};
 let activeConsoleKey = null;
 
 function ensureConsoleTab(key) {
     if (!consoleTabs[key]) {
-        consoleTabs[key] = { open: false, logs: [], _lastStdout: 0, _lastStderr: 0 };
+        consoleTabs[key] = { open: false, logs: [], _lastLogCount: 0 };
     }
     return consoleTabs[key];
 }
@@ -699,15 +797,28 @@ function appendLog(tab, entry) {
     }
 }
 
+function pushLogToBackend(key, type, text) {
+    const session = sessions.find(s => s.key === key);
+    const tunnelId = session?.tunnelId || key;
+    // Fire-and-forget — don't await, don't block UI
+    fetch(`/api/tunnels/${tunnelId}/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, text, ts: Date.now() / 1000 }),
+    }).catch(() => {});
+}
+
 function logFrontend(key, msg) {
     const tab = ensureConsoleTab(key);
     appendLog(tab, { stream: 'frontend', text: msg });
+    pushLogToBackend(key, 'frontend', msg);
     if (activeConsoleKey === key) refreshConsoleBody();
 }
 
 function logSystem(key, msg) {
     const tab = ensureConsoleTab(key);
     appendLog(tab, { stream: 'system', text: msg });
+    pushLogToBackend(key, 'system', msg);
     if (activeConsoleKey === key) refreshConsoleBody();
 }
 
@@ -1819,14 +1930,19 @@ function createSidebarItem(session) {
 
     const isOn = isActive(session) || session.status === 'stopping';
     const conflict = isPortConflict(session);
+    const checking = isChecking(session.key);
+    const locked = conflict || checking || isBusy(session);
     const btnIcon = isBusy(session) ? 'fa-spinner fa-spin' : (conflict ? 'fa-triangle-exclamation' : 'fa-power-off');
     const btnClass = isOn ? 'on' : (conflict ? 'conflict' : 'off');
-    const btnDisabled = conflict ? 'disabled' : '';
+    const btnDisabled = locked ? 'disabled' : '';
 
     el.innerHTML = `
         <div class="sidebar-session-top">
             <span class="sidebar-session-name" title="${session.name}">${session.name}</span>
             <div class="sidebar-session-actions">
+                <button class="sidebar-action-btn sidebar-refresh-btn ${checking ? 'spinning' : ''}" title="Refresh health" ${checking ? 'disabled' : ''}>
+                    <i class="fa-solid fa-arrows-rotate"></i>
+                </button>
                 <button class="sidebar-action-btn sidebar-nuke-btn" title="Force kill port ${session.localPort}">
                     <i class="fa-solid fa-skull-crossbones"></i>
                 </button>
@@ -1839,12 +1955,31 @@ function createSidebarItem(session) {
             <span class="sidebar-session-desc">${session.description}</span>
             <span class="session-type-badge">${session.type}</span>
         </div>
-        <div class="sidebar-session-port">${session.localPort} &rarr; ${session.region}:${session.remotePort}</div>
+        <div class="sidebar-session-bottom">
+            <span class="sidebar-session-port">${session.localPort} &rarr; ${session.region}:${session.remotePort}</span>
+            <div class="session-health">${healthIndicatorsHtml(session)}</div>
+        </div>
     `;
 
     el.querySelector('.sidebar-power-btn').addEventListener('click', (e) => {
         e.stopPropagation();
         toggleSession(session);
+    });
+
+    el.querySelector('.sidebar-refresh-btn').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (isChecking(session.key)) return;
+        await checkSessionHealth(session.key);
+        renderAll();
+    });
+
+    el.querySelectorAll('.health-dot').forEach(dot => {
+        dot.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (isChecking(session.key)) return;
+            await checkSessionHealth(session.key, dot.dataset.check);
+            renderAll();
+        });
     });
 
     el.querySelector('.sidebar-nuke-btn').addEventListener('click', (e) => {
@@ -1869,6 +2004,12 @@ document.getElementById('newConnectionBtn').addEventListener('click', () => {
     switchPane('configPane');
 });
 
+// Refresh all active sessions
+document.getElementById('refreshAllBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    refreshAllHealth();
+});
+
 document.getElementById('consoleCopyBtn').addEventListener('click', async () => {
     const bodyEl = document.getElementById('consoleBody');
     if (!bodyEl) return;
@@ -1876,6 +2017,60 @@ document.getElementById('consoleCopyBtn').addEventListener('click', async () => 
     if (!text.trim()) { showToast('Nothing to copy', 'warning'); return; }
     try { await writeClipboard(text); showToast('Logs copied', 'success'); }
     catch { showToast('Failed to copy', 'error'); }
+});
+
+document.getElementById('consoleRefreshBtn').addEventListener('click', async () => {
+    if (!activeConsoleKey) return;
+    const tab = consoleTabs[activeConsoleKey];
+    if (!tab) return;
+    // Reset counter and re-render from scratch
+    tab._lastLogCount = 0;
+    tab.logs = [];
+    _consoleRenderedKey = null;
+    _consoleRenderedCount = 0;
+    await fetchAndAppendLogs(activeConsoleKey);
+    refreshConsoleBody();
+    showToast('Logs refreshed', 'info');
+});
+
+document.getElementById('consoleSaveBtn').addEventListener('click', async () => {
+    if (!activeConsoleKey) return;
+    const session = sessions.find(s => s.key === activeConsoleKey);
+    const tunnelId = session?.tunnelId || activeConsoleKey;
+    try {
+        // Step 1: Save backend (system) logs — opens folder picker, returns folder + prefix
+        const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'cancelled') return;
+        if (data.status !== 'saved') {
+            showToast(data.error || 'Failed to save', 'error');
+            return;
+        }
+
+        // Step 2: Save client logs to the same folder
+        const tab = consoleTabs[activeConsoleKey];
+        if (tab && tab.logs.length) {
+            const clientLines = tab.logs.map(entry => {
+                const d = new Date();
+                const ts = d.toISOString().replace('T', ' ').replace('Z', '').slice(0, -1);
+                const prefix = STREAM_PREFIXES[entry.stream] || '';
+                return `[${ts}] ${prefix.trim()} ${entry.text}`;
+            });
+            await fetch('/api/tunnels/save-file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    folder: data.folder,
+                    filename: `${data.prefix}_client.log`,
+                    content: clientLines.join('\n'),
+                }),
+            });
+        }
+
+        showToast(`Saved in ${data.folder} (${data.prefix})`, 'success');
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
 });
 
 // === STARTUP ===

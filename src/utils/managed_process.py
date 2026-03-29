@@ -3,19 +3,15 @@ import os
 import subprocess
 import signal
 import sys
-from typing import IO, Optional, Union
 
 import psutil
 
 logger = logging.getLogger("managed_process")
 
 class ManagedProcess:
-    def __init__(self, cmd, output_limit=1000, output=None, errors=None):
+    def __init__(self, cmd):
         self.cmd = cmd
         self.process = None
-        self.output = output if output is not None else []
-        self.errors = errors if errors is not None else []
-        self.output_limit = output_limit
 
     def __enter__(self):
         self.process = subprocess.Popen(
@@ -53,44 +49,23 @@ class ManagedProcess:
         if self.process:
             return self.process.communicate(*args, **kwargs)
         
-    def iter_out(self, stream: Union[str, IO[str]], output_logger: Optional[list] = None, output_limit: Optional[int] = None):
-        """Yield lines from the specified stream (stdout or stderr) as they become available."""
-        output_logger = output_logger if output_logger is not None else []
-        output_limit = output_limit or self.output_limit
-
+    def _iter_stream(self, stream_name):
+        """Yield stripped lines from the named stream as they become available."""
         if not self.process:
             logger.error("Process not started or not registered.")
             return
-
-        if isinstance(stream, str):
-            stream = stream.lower()
-            stream_handle: Optional[IO[str]] = getattr(self.process, stream, None)
-            if not stream_handle:
-                logger.error(f"Stream {stream} not found in process. Available streams: 'stdout', 'stderr'.")
-                return
-        elif stream not in [self.stdout, self.stderr]:
-            logger.error("Invalid stream handle provided.")
+        stream_handle = getattr(self.process, stream_name, None)
+        if not stream_handle:
+            logger.error(f"Stream {stream_name} not found in process.")
             return
-        else:
-            stream_handle = stream
-        
         for line in iter(stream_handle.readline, ''):
-            output_logger.append(line.strip())
-            if len(output_logger) > output_limit:  # Keep only the last `output_limit` lines to prevent memory issues
-                output_logger.pop(0)
             yield line.strip()
 
-    def iter_stdout(self, output_logger: Optional[list] = None, output_limit: Optional[int] = None):
-        """Yield lines from process stdout as they become available."""
-        output_logger = output_logger or self.output
-        output_limit = output_limit or self.output_limit
-        return self.iter_out('stdout', output_logger, output_limit)
-    
-    def iter_stderr(self, output_logger: Optional[list] = None, output_limit: Optional[int] = None):
-        """Yield lines from process stderr as they become available."""
-        output_logger = output_logger or self.errors
-        output_limit = output_limit or self.output_limit
-        return self.iter_out('stderr', output_logger, output_limit)
+    def iter_stdout(self):
+        return self._iter_stream('stdout')
+
+    def iter_stderr(self):
+        return self._iter_stream('stderr')
 
     def kill(self): # Kills process and children
         logger.info(f"Kill Requested for PID {self.pid}")

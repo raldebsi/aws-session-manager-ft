@@ -201,11 +201,11 @@ def k8s_health_check(context=None, kubeconfig_path=None):
     output = process.stdout.read().strip() if process.stdout else ""
     if not output:
         logger.error(process.stderr.read() if process.stderr else "No output from kubectl health check")
-        return False
+        return (False, "")
 
     process.wait()
     logger.info(f"Kubernetes health check output: {output}")
-    return output == "ok"
+    return (output == "ok", output)
 
 
 def get_k8s_nodes(context=None, kubeconfig_path=None):

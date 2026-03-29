@@ -95,11 +95,11 @@ def full_connect():
 
     # --- Step 4: Verify Kubernetes connectivity ---
     try:
-        health = k8s_health_check(kubeconfig_path=mapped.kubeconfig_path)
+        health, health_output = k8s_health_check(kubeconfig_path=mapped.kubeconfig_path)
         if health:
             steps.append({"step": "verify_k8s", "status": "ok"})
         else:
-            steps.append({"step": "verify_k8s", "status": "warning", "message": "Kubernetes health check failed"})
+            steps.append({"step": "verify_k8s", "status": "warning", "message": "Kubernetes health check failed", "output": health_output})
     except Exception as e:
         steps.append({"step": "verify_k8s", "status": "error", "message": str(e)})
 

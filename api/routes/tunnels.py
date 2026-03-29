@@ -1,9 +1,11 @@
 import time
+import threading
 
 from flask import Blueprint, jsonify, request
 
 from src.common import tunnel_manager
 from src.utils.kube import k8s_health_check, start_eks_tunnel
+from src.utils.utils import logger
 
 tunnels_bp = Blueprint("tunnels", __name__, url_prefix="/api/tunnels")
 
@@ -97,24 +99,109 @@ def stop_tunnel(tunnel_id):
         else:
             break
     
-    status = k8s_health_check(connection_id)
+    status, status_out = k8s_health_check(connection_id)
     
     return jsonify({"tunnel_id": tunnel_id, "stopped": not status, "tunnel_state": tunnel_state})
 
 
-@tunnels_bp.route("/<path:tunnel_id>/output", methods=["GET"])
-def tunnel_output(tunnel_id):
-    """Get stdout output from a tunnel."""
-    output = tunnel_manager.get_output(tunnel_id)
-    if output is None:
-        return jsonify({"error": f"Tunnel '{tunnel_id}' not found or no output"}), 404
-    return jsonify({"tunnel_id": tunnel_id, "output": output})
+@tunnels_bp.route("/<path:tunnel_id>/logs", methods=["GET"])
+def tunnel_logs(tunnel_id):
+    """Get unified log entries from a tunnel. Each entry: {ts, type, text}."""
+    logs = tunnel_manager.get_logs(tunnel_id)
+    if logs is None:
+        return jsonify({"error": f"Tunnel '{tunnel_id}' not found"}), 404
+    return jsonify({"tunnel_id": tunnel_id, "logs": logs})
 
 
-@tunnels_bp.route("/<path:tunnel_id>/errors", methods=["GET"])
-def tunnel_errors(tunnel_id):
-    """Get stderr output from a tunnel."""
-    errors = tunnel_manager.get_errors(tunnel_id)
-    if errors is None:
-        return jsonify({"error": f"Tunnel '{tunnel_id}' not found or no errors"}), 404
-    return jsonify({"tunnel_id": tunnel_id, "errors": errors})
+@tunnels_bp.route("/<path:tunnel_id>/logs", methods=["POST"])
+def append_tunnel_log(tunnel_id):
+    """Append a log entry to a tunnel. Body: {type, text, ts?}. ts fallback is in tunnel_manager."""
+    if tunnel_id not in tunnel_manager.list_tunnels():
+        return jsonify({"error": f"Tunnel '{tunnel_id}' not found"}), 404
+
+    data = request.get_json(force=True)
+    log_type = data.get("type")
+    text = data.get("text")
+    if not log_type or text is None:
+        return jsonify({"error": "Required: type, text"}), 400
+
+    tunnel_manager.append_log(tunnel_id, log_type, text, ts=data.get("ts"))
+    return jsonify({"status": "ok"}), 201
+
+
+@tunnels_bp.route("/<path:tunnel_id>/logs/save", methods=["POST"])
+def save_tunnel_logs(tunnel_id):
+    """Save backend tunnel logs via native folder picker. Returns folder + prefix for client to save its own file."""
+    from datetime import datetime
+
+    logs = tunnel_manager.get_logs(tunnel_id)
+    if logs is None:
+        return jsonify({"error": f"Tunnel '{tunnel_id}' not found"}), 404
+
+    # Format logs for saving
+    lines = []
+    for entry in logs or []:
+        ts = datetime.fromtimestamp(entry["ts"]).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        lines.append(f"[{ts}] [{entry['type']}] {entry['text']}")
+    content = "\n".join(lines)
+
+    prefix = f"{tunnel_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    filename = f"{prefix}_system.log"
+
+    # Run folder dialog on a separate thread to avoid blocking Flask
+    result = {}
+    def open_dialog():
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes('-topmost', True)
+            folder = filedialog.askdirectory(
+                title=f"Select folder to save logs — {tunnel_id}",
+            )
+            root.destroy()
+            if folder:
+                import os
+                filepath = os.path.join(folder, filename)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(content)
+                result["folder"] = folder
+                result["prefix"] = prefix
+            else:
+                result["cancelled"] = True
+        except Exception as e:
+            result["error"] = str(e)
+
+    dialog_thread = threading.Thread(target=open_dialog)
+    dialog_thread.start()
+    dialog_thread.join(timeout=60)
+
+    if "error" in result:
+        logger.error(f"Failed to save logs for {tunnel_id}: {result['error']}")
+        return jsonify({"error": result["error"]}), 500
+    if result.get("cancelled"):
+        return jsonify({"status": "cancelled"}), 200
+    return jsonify({"status": "saved", "folder": result["folder"], "prefix": result["prefix"]})
+
+
+@tunnels_bp.route("/save-file", methods=["POST"])
+def save_file():
+    """Generic file save: write content to folder/filename. Body: {folder, filename, content}."""
+    import os
+    data = request.get_json(force=True)
+    folder = data.get("folder")
+    filename = data.get("filename")
+    content = data.get("content")
+
+    if not folder or not filename or content is None:
+        return jsonify({"error": "Required: folder, filename, content"}), 400
+
+    filepath = os.path.join(folder, filename)
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return jsonify({"status": "saved", "path": filepath})
+    except Exception as e:
+        logger.error(f"Failed to save file {filepath}: {e}")
+        return jsonify({"error": str(e)}), 500

@@ -145,23 +145,24 @@ def get_pid_on_port(port: int) -> int:
                 ["netstat", "-ano", "-p", "TCP"],
                 capture_output=True, text=True, timeout=5
             )
+            listen_addrs = {f"127.0.0.1:{port}", f"0.0.0.0:{port}"}
             for line in result.stdout.splitlines():
                 # Match lines like:  TCP    127.0.0.1:9444    0.0.0.0:0    LISTENING    12345
                 parts = line.split()
                 if len(parts) >= 5 and parts[0] == "TCP" and "LISTENING" in parts:
-                    addr = parts[1]
-                    if addr == f"127.0.0.1:{port}":
+                    if parts[1] in listen_addrs:
                         pid = int(parts[-1])
                         return pid
         else:
-            # Linux / macOS: use lsof
-            result = subprocess.run(
-                ["lsof", "-i", f"TCP@127.0.0.1:{port}", "-t", "-sTCP:LISTEN"],
-                capture_output=True, text=True, timeout=5
-            )
-            pids = result.stdout.strip().splitlines()
-            if pids:
-                return int(pids[0])
+            # Linux / macOS: use lsof — check both localhost and wildcard
+            for addr in [f"TCP@127.0.0.1:{port}", f"TCP@0.0.0.0:{port}"]:
+                result = subprocess.run(
+                    ["lsof", "-i", addr, "-t", "-sTCP:LISTEN"],
+                    capture_output=True, text=True, timeout=5
+                )
+                pids = result.stdout.strip().splitlines()
+                if pids:
+                    return int(pids[0])
     except Exception as e:
         logger.error(f"Failed to detect PID on port {port}: {e}")
 

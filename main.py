@@ -94,7 +94,7 @@ def main():
         print("Tunnel started successfully. Verifying Kubernetes connection...")
         if tunnel_id:
             try:
-                healthcheck = k8s_health_check()
+                healthcheck, healthcheck_output = k8s_health_check()
                 if not healthcheck:
                     print("Kubernetes health check failed.")
                     continue
