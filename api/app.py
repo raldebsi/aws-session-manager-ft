@@ -1,6 +1,6 @@
+import atexit
 import os
 import sys
-import atexit
 
 # Ensure project root is on the path so src.* imports work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

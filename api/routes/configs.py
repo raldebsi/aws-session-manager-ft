@@ -5,12 +5,13 @@ import platform
 import re
 import subprocess
 import zlib
+
 from flask import Blueprint, jsonify, request
 
-from src.common import USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
-from src.utils.data_loaders import load_user_config, load_connections
-from src.utils.utils import save_json, resolve_absolute_path
-from src.models.config import SSMUserConfig, SSMUserConnection, SSMConnection, SSMConnectionConfig
+from src.common import CONNECTIONS_CONFIG_PATH, USER_CONFIG_PATH
+from src.models.config import SSMConnection, SSMConnectionConfig, SSMUserConfig, SSMUserConnection
+from src.utils.data_loaders import load_connections, load_user_config
+from src.utils.utils import resolve_absolute_path, save_json
 
 configs_bp = Blueprint("configs", __name__, url_prefix="/api/configs")
 
@@ -114,6 +115,14 @@ def create_connection():
     missing = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+    # Sanitize ID: lowercase, spaces/underscores to dashes, strip non-alphanumeric
+    raw_id = data["id"]
+    sanitized_id = re.sub(r'[^a-z0-9-]', '', re.sub(r'[\s_]+', '-', raw_id.lower())).strip('-')
+    sanitized_id = re.sub(r'-+', '-', sanitized_id)
+    if not sanitized_id:
+        return jsonify({"error": "ID must contain at least one alphanumeric character"}), 400
+    data["id"] = sanitized_id
 
     connections_path = resolve_absolute_path(CONNECTIONS_CONFIG_PATH)
     file_path = os.path.join(connections_path, f"{data['id']}.json")

@@ -1,9 +1,10 @@
 import psutil
+
 from flask import Blueprint, jsonify, request
 
-from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
-from src.utils.data_loaders import load_user_config, load_connections
-from src.utils.kube import k8s_health_check, get_k8s_nodes
+from src.common import CONNECTIONS_CONFIG_PATH, USER_CONFIG_PATH, tunnel_manager
+from src.utils.data_loaders import load_connections, load_user_config
+from src.utils.kube import get_k8s_nodes, k8s_health_check
 from src.utils.utils import get_pid_on_port, tcp_health_check
 
 sessions_bp = Blueprint("sessions", __name__, url_prefix="/api/sessions")

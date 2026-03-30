@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 import sys
 
 import yaml
@@ -11,6 +11,8 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+APP_VERSION = "0.1.0"
 
 tunnel_manager = SSMTunnelManager()
 
@@ -33,7 +35,7 @@ SETTINGS_DEFAULTS = {
     "max_tunnels": 5,
     "polling_interval": 1,
     "readiness_timeout": 20,
-    "healthcheck_timeout": 10,
+    "healthcheck_timeout": 5,
 }
 
 

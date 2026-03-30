@@ -75,6 +75,18 @@ body {
 .sidebar.collapsed .sidebar-new-connection {
     display: none;
 }
+.sidebar.collapsed .sessions-group-title {
+    padding: 8px 4px 4px 0;
+    justify-content: center;
+    gap: 0;
+}
+.sidebar.collapsed .sessions-group-title .sessions-group-icon {
+    font-size: 14px;
+}
+.sidebar.collapsed .sessions-group-title .sessions-count,
+.sidebar.collapsed .sessions-group-title .sidebar-refresh-all-btn {
+    display: none;
+}
 
 .sidebar-header {
     display: flex;
@@ -449,6 +461,13 @@ hr {
 .session-item.starting .session-shutdown,
 .session-item.stopping .session-shutdown {
     pointer-events: none;
+    opacity: 1;
+}
+.session-item.starting .session-shutdown .fa-spinner {
+    color: var(--accent);
+}
+.session-item.stopping .session-shutdown .fa-spinner {
+    color: var(--success);
 }
 
 /* Stopping: spinner + green border (still active) */
@@ -1934,27 +1953,31 @@ hr {
 }
 
 .toast-success {
-    background: rgba(34, 197, 94, 0.15);
-    border: 1px solid rgba(34, 197, 94, 0.3);
+    background: rgba(34, 197, 94, 0.25);
+    border: 1px solid rgba(34, 197, 94, 0.5);
     color: var(--success);
+    backdrop-filter: blur(12px);
 }
 
 .toast-error {
-    background: rgba(211, 47, 47, 0.15);
-    border: 1px solid rgba(211, 47, 47, 0.3);
+    background: rgba(211, 47, 47, 0.25);
+    border: 1px solid rgba(211, 47, 47, 0.5);
     color: var(--error-border);
+    backdrop-filter: blur(12px);
 }
 
 .toast-warning {
-    background: rgba(234, 179, 8, 0.15);
-    border: 1px solid rgba(234, 179, 8, 0.3);
+    background: rgba(234, 179, 8, 0.25);
+    border: 1px solid rgba(234, 179, 8, 0.5);
     color: var(--warning);
+    backdrop-filter: blur(12px);
 }
 
 .toast-info {
-    background: rgba(37, 99, 235, 0.15);
-    border: 1px solid rgba(37, 99, 235, 0.3);
+    background: rgba(37, 99, 235, 0.25);
+    border: 1px solid rgba(37, 99, 235, 0.5);
     color: var(--accent);
+    backdrop-filter: blur(12px);
 }
 
 @keyframes toast-in {

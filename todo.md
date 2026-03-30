@@ -1,0 +1,43 @@
+# To do
+- [X] Allow stderr and stdout to be read at the same time by starting two threads per each, stderr thread and stdout thread.
+- [X] Add kube config editing to add the port in case it's needed:
+    clusters[].server
+- [X] Support RDS and other non-kube forwarders
+- [X] Prevent a tunnel from starting if it already exists
+  - [X] Prevent it from starting
+  - [X] Detect if it's running from the beginning, not after all contexts have been overwritten.
+  - [X] Proper return values
+- [X] Allow only 127 and not 0 to connect for security reasons [Add a debug env var and add env loader]
+- [X] Support custom kubeconfig path that is relative to avoid messing with the real one
+- [X] App dim 960x800
+- [X] Prevent a new tunnel from starting on the same port.
+- [X] Add SSM plugin availability check — verify plugin is installed, else provide download link or prompt user
+  - [X] Create a new util + api for it called verify ssm that simply invokes `session-manager-plugin --version` and checks that the output is a version, only numbers and dots, and some empty lines, and make it return the version or return -1 if not error. Use the run_cmd util for that.
+  - [X] In advanced, add a button to verify the state of the ssm, that will call this endpoint and return the results. And either toast to the user the result on success, or on failure show him an error with a url to setup guide https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html.
+  - [X] Run the SSM check on startup, only if it succeeds you will allow the user to connect. All other functionalities are affected like setting up connections viewing logs, settings ...etc. Just connecting should not be alloed unless SSM succeeds. And because of this the button verify SSM Plugin now is allowed to modify this state as well in case someone installs it and comes back to check.
+    - [X] Toast on startup with SSM version and app version, add app version to common.py and add it to the healthcheck of the app, and call the healthcheck on startup as well and make it return app version. The healthcheck will also do the SSM check so keep the api there in its file so the button can use it, but don't let the on-startup use it, instead let the healtcheck call it and return app version and ssm version.
+  - [X] Move the aws and ssm apis from consts route into aws route
+- [X] Fix sidebar collapse alignment bug - when the sidebar is collapsed active and available sessions don't align with the other icons.
+- [X] Make frontend tunnel lock per-port (dict[port]) instead of globally locking everything.
+- [X] Add cache busting
+- [X] Fix logs not showing in console
+- [X] Fix all log types showing as "tunnel" instead of "system"
+- [X] System console should respect the log limit if not already
+- [X] Reduce default timeout from 10s to 5s in the settings' consts.
+- [X] Make the settings page only save variables that the user edited, this way updating defaults reflects on the user. Make sure the functions that modify and read the settings yaml file fallback to proper defaults when their keys are missing a value.
+- [ ] Cleanup:
+  - [ ] Update the pipelines route and old routes to match our new formats and behavior for other functions
+  - [ ] Update main.py similar to the task above.
+  - [X] Check everything that is importing inside a function and move the import to the top of the file properly.
+  - [X] Move through the entire app and detect small utils that are re-created too many items and convert them to helper functions if not found or else use the helper, such as detecting the OS and so on.
+  - [ ] Sort imports as so: first comes the `import X`. Then comes the `from X import Y` with a line break in between. Then finally comes the local imports.
+- [X] Closing a tab sometimes just changes the circle's color
+- [X] Logs are no longer auto updating in the "Logs" page until I go to a different tab and come back, this is not an issue since logs are meant to be paused, but add a refresh button to re-render ONLY THIS LOG TAB.
+- [X] When a connection is not used it's grayed out, but we forgot to tell the user why it's grayed out.
+  - [X] Now do the same thing to the connections page, the connections are faded when they're not used, so we need to allow the user on hovering over it to see a tooltip that tells him it's unused.
+- [X] Creating an ID in the settings for the connection should automatically lowercase everything while the user is typing and convert all spaces and underscores to dashes, and disallow non alphanumeric. If it's empty then make it use the NAME field instead and make it all dashed and so on as just explained followed by the region nad port, also the same formatting policy. Make it auto update as the user is typing in the name / region / port as well. Note that the type eks/rds/...etc also changes the port.
+  - [X] Error -> It is not allowing me to write spaces or dashes. It should allow spaces but converts them to dashes. The same to underscores.
+- [X] When the connection is connecting the power button becomes dark. this is no longer necessary because the entire card is fading.
+  - [X] New error -> I tried enabling 2 connections at once, once the first spinner was done it somehow removed the 2nd spinner. In other words, the spinners of different connections are linked together even though they're unrelated. New update: The spin for the one that was called first worked, but the 2nd one is now stuck instead. I don't think your solution was right, it was hacky to begin with. Hint: Moving to a different tab and coming back unstucks it, so you most likely already have the state for it.
+- [X] Toasts backgrounds are too transparent they're not readable
+- [X] Log every api call by updating a flask decorator to detect all routes being called with their url params (but not body).

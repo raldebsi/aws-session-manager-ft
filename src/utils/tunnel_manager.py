@@ -1,10 +1,12 @@
-from enum import Enum
-import signal
-import time
-import threading
-from typing import Optional, TypedDict, Union
-from src.utils.managed_process import ManagedProcess
+import atexit
 import logging
+import signal
+import threading
+import time
+from enum import Enum
+from typing import Optional, TypedDict, Union
+
+from src.utils.managed_process import ManagedProcess
 
 logger = logging.getLogger("tunnel_manager")
 
@@ -250,7 +252,6 @@ class SSMTunnelManager:
         logger.info("All tunnels have been shut down.")
 
     def register_shutdown_handler(self):
-        import atexit, signal
         atexit.register(self.shutdown_all_tunnels)
         signal.signal(signal.SIGINT, self.shutdown_all_tunnels)
         signal.signal(signal.SIGTERM, self.shutdown_all_tunnels)

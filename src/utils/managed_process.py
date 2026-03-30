@@ -1,7 +1,7 @@
 import logging
 import os
-import subprocess
 import signal
+import subprocess
 import sys
 
 import psutil

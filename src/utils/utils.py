@@ -1,9 +1,13 @@
+import configparser
 import ctypes
 import json
-import logging
 import os
-import sys
+import platform
+import re
+import signal
+import socket
 import subprocess
+import sys
 from typing import Optional
 
 from src.common import DEBUG_MODE, logger
@@ -35,8 +39,7 @@ def get_hosts_path() -> str:
     if DEBUG_MODE:
         logger.warning("Running in debug mode, using mock hosts path.")
         return "mock_hosts.txt"
-    
-    import platform
+
     if platform.system() == "Windows":
         return r"C:\Windows\System32\drivers\etc\hosts"
     return "/etc/hosts"
@@ -135,7 +138,6 @@ def update_hosts(endpoint: str):
 
 def get_pid_on_port(port: int) -> int:
     """Find the PID of the process listening on 127.0.0.1:port. Returns -1 if none."""
-    import platform
     port = int(port)
     system = platform.system()
 
@@ -171,7 +173,6 @@ def get_pid_on_port(port: int) -> int:
 
 def kill_pid(pid: int) -> bool:
     """Kill a process by PID. Returns True if successful."""
-    import signal
     pid = int(pid)
     if pid <= 0:
         return False
@@ -193,7 +194,6 @@ def kill_pid(pid: int) -> bool:
 
 def tcp_health_check(host: str = "127.0.0.1", port: int = 5432, timeout: float = 3.0) -> tuple[bool, str]:
     """Check if a TCP port is accepting connections. Returns (healthy, detail)."""
-    import socket
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True, f"Port {port} accepting connections"
@@ -211,9 +211,28 @@ def run_cmd(cmd: list):
     return process
 
 
+
+def verify_ssm_plugin() -> str:
+    """Check if the SSM session-manager-plugin is installed.
+    Returns the version string (e.g. '1.2.497.0') on success, or '-1' on failure."""
+    try:
+        process = run_cmd(["session-manager-plugin", "--version"])
+        output = process.stdout.read().strip() if process.stdout else ""
+        process.wait()
+        # Version output is typically just a version number like "1.2.497.0"
+        # with possibly some empty lines
+        for line in output.splitlines():
+            line = line.strip()
+            if line and re.match(r'^[\d.]+$', line):
+                return line
+        return "-1"
+    except Exception as e:
+        logger.warning(f"SSM plugin check failed: {e}")
+        return "-1"
+
+
 def get_aws_profiles_by_file(credentials_path: Optional[str] = None) -> list[str]:
     """Read AWS profile names from ~/.aws/credentials (INI section headers)."""
-    import configparser
     if not credentials_path:
         credentials_path = resolve_absolute_path("~/.aws/credentials")
     else:

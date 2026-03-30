@@ -1,6 +1,6 @@
+import json
 from dataclasses import dataclass, field
 from typing import Dict, Optional
-import json
 
 @dataclass
 class SSMUserConnection:

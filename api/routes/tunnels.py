@@ -1,13 +1,15 @@
-import time
+import os
 import threading
+import time
+import tkinter as tk
+from tkinter import filedialog
 
 from flask import Blueprint, jsonify, request
 
-from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
-from src.utils.data_loaders import load_user_config, load_connections
+from src.common import CONNECTIONS_CONFIG_PATH, USER_CONFIG_PATH, tunnel_manager
+from src.utils.data_loaders import load_connections, load_user_config
 from src.utils.kube import k8s_health_check, start_eks_tunnel, start_ssm_tunnel
-from src.utils.utils import tcp_health_check
-from src.utils.utils import logger
+from src.utils.utils import logger, tcp_health_check
 
 tunnels_bp = Blueprint("tunnels", __name__, url_prefix="/api/tunnels")
 
@@ -199,19 +201,15 @@ def save_tunnel_logs(tunnel_id):
     result = {}
     def open_dialog():
         try:
-            import tkinter as tk
-            from tkinter import filedialog
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
-            import os
             folder = filedialog.askdirectory(
                 title=f"Select folder to save logs — {tunnel_id}",
                 initialdir=os.getcwd(),
             )
             root.destroy()
             if folder:
-                import os
                 filepath = os.path.join(folder, filename)
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(content)

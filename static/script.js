@@ -12,7 +12,7 @@ const _origConsole = {
 
 function _captureConsole(level, args) {
     const text = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
-    const stream = level === 'error' ? 'stderr' : (level === 'warn' ? 'system' : 'system');
+    const stream = level === 'error' ? 'stderr' : (level === 'warn' ? 'console' : 'console');
     const entry = { stream, text: `[${level}] ${text}` };
     if (_systemLogReady) {
         const tab = ensureConsoleTab(SYSTEM_LOG_KEY);
@@ -132,7 +132,7 @@ const pageCache = {};
 
 async function fetchPage(pageName) {
     if (pageCache[pageName]) return pageCache[pageName];
-    const res = await fetch(`/api/pages/${pageName}`);
+    const res = await fetch(`/api/pages/${pageName}?v=${document.querySelector('script[src*="script.js"]').src.split('v=')[1] || ''}`);
     if (!res.ok) throw new Error(`Failed to load page: ${pageName}`);
     const html = await res.text();
     pageCache[pageName] = html;
@@ -191,7 +191,9 @@ document.querySelectorAll('.sidebar-pane').forEach(pane => {
 
 // === SESSION DATA ===
 
-let tunnelBusy = false; // UI lock: true while any tunnel is starting
+const tunnelBusyPorts = new Set(); // UI lock: set of ports currently starting/stopping
+const clientStatusOverrides = {};  // key → 'starting'|'stopping' while client pipeline is running
+let ssmPluginVerified = false;     // true once SSM plugin availability is confirmed
 
 // Health state per session key: { port: {status, detail}, k8s: {status, detail}, tunnel: {status, detail} }
 const sessionHealth = {};
@@ -280,23 +282,59 @@ async function fetchSessions() {
     return sessions;
 }
 
+/** Return the effective UI status for a session, considering client-side pipeline overrides. */
+function effectiveStatus(session) {
+    return clientStatusOverrides[session.key] || session.status;
+}
+
 function isActive(session) {
-    return session.status === 'active';
+    return effectiveStatus(session) === 'active';
 }
 
 function isBusy(session) {
-    return session.status === 'starting' || session.status === 'stopping';
+    const s = effectiveStatus(session);
+    return s === 'starting' || s === 'stopping';
 }
 
 function isPortConflict(session) {
-    return session.status === 'port_conflict';
+    return effectiveStatus(session) === 'port_conflict';
+}
+
+function isPortBusy(port) {
+    return tunnelBusyPorts.has(port);
+}
+
+let appVersion = null;
+
+async function startupHealthCheck() {
+    try {
+        const res = await fetch('/health');
+        const data = await res.json();
+        appVersion = data.app_version || null;
+        ssmPluginVerified = !!data.ssm_installed;
+        if (ssmPluginVerified) {
+            console.log(`[init] App v${appVersion}, SSM Plugin v${data.ssm_version}`);
+            showToast(`SSM Manager v${appVersion} — SSM Plugin v${data.ssm_version}`, 'success', 4000);
+        } else {
+            console.warn(`[init] App v${appVersion}, SSM Plugin not found`);
+        }
+    } catch (err) {
+        console.error('[init] Health check failed:', err);
+        ssmPluginVerified = false;
+    }
 }
 
 async function toggleSession(session) {
-    if (tunnelBusy) { console.log(`[toggle] ${session.key}: blocked — tunnelBusy`); return; }
+    const port = session.localPort;
+    if (isPortBusy(port)) { console.log(`[toggle] ${session.key}: blocked — port ${port} busy`); return; }
+
+    if (!ssmPluginVerified) {
+        showToast('SSM Plugin not found. Install it from Advanced > Verify SSM Plugin.', 'error', 6000);
+        return;
+    }
 
     if (isPortConflict(session)) {
-        showToast(`Port ${session.localPort} is in use by another process (PID ${session.portPid}). Use the kill button to free it.`, 'warning');
+        showToast(`Port ${port} is in use by another process (PID ${session.portPid}). Use the kill button to free it.`, 'warning');
         return;
     }
 
@@ -312,18 +350,21 @@ async function toggleSession(session) {
         }
     }
 
-    tunnelBusy = true;
-    console.log(`[toggle] ${session.key}: ${isActive(session) ? 'disconnecting' : 'connecting'}...`);
+    tunnelBusyPorts.add(port);
+    const action = isActive(session) ? 'disconnecting' : 'connecting';
+    clientStatusOverrides[session.key] = action === 'connecting' ? 'starting' : 'stopping';
+    console.log(`[toggle] ${session.key}: ${action}... (port ${port} locked)`);
 
     try {
-        if (isActive(session)) {
+        if (action === 'disconnecting') {
             await disconnectSession(session);
         } else {
             await connectSession(session);
         }
         refreshDashboardStats();
     } finally {
-        tunnelBusy = false;
+        delete clientStatusOverrides[session.key];
+        tunnelBusyPorts.delete(port);
         renderAll();
     }
 }
@@ -341,7 +382,6 @@ async function disconnectSession(session) {
         return;
     }
 
-    session.status = 'stopping';
     resetHealth(key);
     renderAll();
     openConsoleTab(key);
@@ -435,7 +475,6 @@ async function forceKillPort(session) {
 async function connectSession(session) {
     const key = session.key;
     console.log(`[connect] ${key}: starting connect pipeline`);
-    session.status = 'starting';
     renderAll();
     openConsoleTab(key);
 
@@ -821,15 +860,17 @@ function healthIndicatorsHtml(session) {
 }
 
 function sessionIcon(session) {
-    if (session.status === 'starting') return 'fa-spinner fa-spin';
-    if (session.status === 'stopping') return 'fa-spinner fa-spin';
-    if (session.status === 'port_conflict') return 'fa-triangle-exclamation';
+    const s = effectiveStatus(session);
+    if (s === 'starting') return 'fa-spinner fa-spin';
+    if (s === 'stopping') return 'fa-spinner fa-spin';
+    if (s === 'port_conflict') return 'fa-triangle-exclamation';
     return 'fa-power-off';
 }
 
 function sessionBtnClass(session) {
-    if (session.status === 'active' || session.status === 'stopping') return 'on';
-    if (session.status === 'port_conflict') return 'conflict';
+    const s = effectiveStatus(session);
+    if (s === 'active' || s === 'stopping') return 'on';
+    if (s === 'port_conflict') return 'conflict';
     return 'off';
 }
 
@@ -837,12 +878,19 @@ function createDashboardCard(session) {
     const el = document.createElement('div');
     el.className = 'session-item';
     el.dataset.sessionKey = session.key;
+    const eStatus = effectiveStatus(session);
     if (isActive(session)) el.classList.add('active');
-    if (session.status === 'error') el.classList.add('error');
-    if (session.status === 'starting') el.classList.add('starting');
-    if (session.status === 'stopping') el.classList.add('stopping');
+    if (eStatus === 'error') el.classList.add('error');
+    if (eStatus === 'starting') el.classList.add('starting');
+    if (eStatus === 'stopping') el.classList.add('stopping');
     if (isPortConflict(session)) el.classList.add('port-conflict');
-    if (tunnelBusy && !isBusy(session)) el.classList.add('tunnel-lock');
+    if (isPortBusy(session.localPort) && !isBusy(session)) {
+        el.classList.add('tunnel-lock');
+        el.title = `Port ${session.localPort} is busy — another tunnel on this port is starting or stopping`;
+    }
+    if (eStatus === 'error') {
+        el.title = el.title || `Last connection attempt failed — click to view logs`;
+    }
 
     const btnClass = sessionBtnClass(session);
     const btnIcon = sessionIcon(session);
@@ -970,6 +1018,7 @@ async function renderLogsPage() {
     const actionsBar = document.createElement('div');
     actionsBar.className = 'logs-page-actions';
     actionsBar.innerHTML = `
+        <button class="conn-action-btn logs-page-refresh-btn" title="Refresh this tab"><i class="fa-solid fa-arrows-rotate"></i></button>
         <button class="conn-action-btn logs-page-copy-btn" title="Copy logs"><i class="fa-solid fa-copy"></i></button>
         <button class="conn-action-btn logs-page-save-btn" title="Save logs"><i class="fa-solid fa-floppy-disk"></i></button>
     `;
@@ -981,6 +1030,28 @@ async function renderLogsPage() {
     body.className = 'logs-page-body';
     container.appendChild(body);
     mainContentBody.appendChild(container);
+
+    // Refresh button — re-fetch logs for the active tab and re-render
+    actionsBar.querySelector('.logs-page-refresh-btn').addEventListener('click', async () => {
+        const btn = actionsBar.querySelector('.logs-page-refresh-btn');
+        btn.classList.add('spinning');
+        const activeTab = allTabs.find(t => t.key === logsPageActiveKey);
+        if (activeTab && activeTab.key !== SYSTEM_LOG_KEY) {
+            try {
+                const session = sessions.find(s => s.key === activeTab.key);
+                const tunnelId = session?.tunnelId || activeTab.key;
+                const res = await fetch(`/api/tunnels/${tunnelId}/logs`);
+                if (res.ok) {
+                    const data = await res.json();
+                    activeTab.logs = data.logs || [];
+                    activeTab.ci = data.connection_index;
+                }
+            } catch { /* non-critical */ }
+        }
+        refreshLogsPageBody(container, allTabs);
+        btn.classList.remove('spinning');
+        showToast('Logs refreshed', 'info');
+    });
 
     // Copy button
     actionsBar.querySelector('.logs-page-copy-btn').addEventListener('click', async () => {
@@ -1071,6 +1142,7 @@ function refreshLogsPageBody(container, allTabs) {
         stdout:   '[tunnel] ',
         stderr:   '[error]  ',
         frontend: '[client] ',
+        console:  '[system] ',
         system:   '[system] ',
     };
 
@@ -1217,7 +1289,7 @@ function renderConsoleTabs() {
         if (!tab.open) continue;
         const session = sessions.find(s => s.key === key);
         const name = session ? session.name : key;
-        const status = session ? session.status : 'inactive';
+        const status = session ? effectiveStatus(session) : 'inactive';
 
         const tabEl = document.createElement('button');
         tabEl.className = `console-tab${key === activeConsoleKey ? ' active' : ''}`;
@@ -1227,14 +1299,14 @@ function renderConsoleTabs() {
             <span class="console-tab-close" title="Close"><i class="fa-solid fa-xmark"></i></span>
         `;
 
-        tabEl.addEventListener('click', (e) => {
-            if (e.target.closest('.console-tab-close')) {
-                closeConsoleTab(key);
-            } else {
-                activeConsoleKey = key;
-                renderConsoleTabs();
-                refreshConsoleBody();
-            }
+        tabEl.querySelector('.console-tab-close').addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeConsoleTab(key);
+        });
+        tabEl.addEventListener('click', () => {
+            activeConsoleKey = key;
+            renderConsoleTabs();
+            refreshConsoleBody();
         });
 
         tabsEl.appendChild(tabEl);
@@ -1247,6 +1319,7 @@ const STREAM_PREFIXES = {
     stdout:   '[tunnel] ',
     stderr:   '[error]  ',
     frontend: '[client] ',
+    console:  '[system] ',
     system:   '',
 };
 
@@ -1437,7 +1510,10 @@ async function renderConnections() {
 function createConnCard(data, type, key, flags = {}) {
     const el = document.createElement('div');
     el.className = 'conn-card';
-    if (flags.unreferenced) el.classList.add('unreferenced');
+    if (flags.unreferenced) {
+        el.classList.add('unreferenced');
+        el.title = 'This connection is not used by any session — create a session that references it, or delete it';
+    }
 
     const icon = type === 'connection' ? 'fa-server' : 'fa-user';
     const badge = data.type ? data.type.toUpperCase() : '';
@@ -1630,12 +1706,70 @@ async function renderCreateConnectionForm(editData = null, editKey = null) {
     document.getElementById('connType').addEventListener('change', applyFieldOverrides);
     applyFieldOverrides();
 
+    // --- Auto-format ID field ---
+    const idInput = document.getElementById('connId');
+    const nameInput = document.getElementById('connName');
+    const regionInput = document.getElementById('connRegion');
+    const remotePortInput = document.getElementById('connRemotePort');
+    const typeSelect = document.getElementById('connType');
+    let idManuallyEdited = false;
+
+    function slugify(text) {
+        return text.toLowerCase().replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    }
+
+    function autoGenerateId() {
+        if (idManuallyEdited) return;
+        const name = nameInput.value.trim();
+        const region = regionInput.value.trim();
+        const port = remotePortInput.value.trim();
+        if (!name) { idInput.value = ''; return; }
+        let parts = [name];
+        if (region) parts.push(region);
+        if (port) parts.push(port);
+        idInput.value = slugify(parts.join('-'));
+    }
+
+    function sanitizeWhileTyping(text) {
+        // Allow lowercase alphanumeric, spaces, underscores, dashes while typing
+        return text.toLowerCase().replace(/[^a-z0-9 _-]/g, '');
+    }
+
+    idInput.addEventListener('input', () => {
+        const pos = idInput.selectionStart;
+        const original = idInput.value;
+        idInput.value = sanitizeWhileTyping(original);
+        idInput.selectionStart = idInput.selectionEnd = Math.min(pos, idInput.value.length);
+        idManuallyEdited = idInput.value.trim().length > 0;
+    });
+
+    // On blur: convert spaces/underscores to dashes (full slugify)
+    idInput.addEventListener('blur', () => {
+        if (idInput.value.trim()) {
+            idInput.value = slugify(idInput.value);
+        } else {
+            idManuallyEdited = false;
+            autoGenerateId();
+        }
+    });
+
+    nameInput.addEventListener('input', autoGenerateId);
+    regionInput.addEventListener('input', autoGenerateId);
+    remotePortInput.addEventListener('input', autoGenerateId);
+    typeSelect.addEventListener('change', () => {
+        // Type change updates remote port via applyFieldOverrides, then re-derive ID
+        setTimeout(autoGenerateId, 0);
+    });
+
     if (editData) {
         fillConnectionForm(editData);
         if (isEdit) {
-            const idInput = document.getElementById('connId');
             idInput.readOnly = true;
             idInput.classList.add('input-readonly');
+            idManuallyEdited = true; // Don't auto-generate for edits
+        } else {
+            // Duplicating — allow auto-generation if ID was cleared
+            idManuallyEdited = idInput.value.trim().length > 0;
         }
     }
 
@@ -1813,7 +1947,7 @@ async function renderCreateUserConnectionForm(editData = null, editKey = null) {
 
     (async () => {
         try {
-            const res = await fetch('/api/consts/aws/profiles/file');
+            const res = await fetch('/api/aws/profiles/file');
             const data = await res.json();
             const profiles = data.profiles || [];
             profileSelect.innerHTML = '';
@@ -2113,6 +2247,29 @@ async function renderAdvanced() {
 
     mainContentBody.innerHTML = html;
 
+    // SSM Plugin verify button
+    document.getElementById('verifySsmBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('verifySsmBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Checking...';
+        try {
+            const res = await fetch('/api/aws/ssm/verify');
+            const data = await res.json();
+            ssmPluginVerified = !!data.installed;
+            if (data.installed) {
+                showToast(`SSM Plugin installed (v${data.version}) — connections enabled`, 'success');
+            } else {
+                showToast('SSM Plugin not found — click for setup guide', 'error', 8000);
+                window.open('https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html', '_blank');
+            }
+        } catch (err) {
+            showToast(`SSM check failed: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-stethoscope"></i> Verify SSM Plugin';
+        }
+    });
+
     // Nuke port chips from user connection ports
     const chipsEl = document.getElementById('nukePortChips');
     const ports = new Set();
@@ -2394,13 +2551,23 @@ function createSidebarItem(session) {
     const el = document.createElement('div');
     el.className = 'sidebar-session-item';
     el.dataset.sessionKey = session.key;
+    const eStatus = effectiveStatus(session);
     if (isActive(session)) el.classList.add('active');
-    if (session.status === 'error') el.classList.add('error');
-    if (session.status === 'starting') el.classList.add('starting');
-    if (session.status === 'stopping') el.classList.add('stopping');
-    if (isPortConflict(session)) el.classList.add('port-conflict');
+    if (eStatus === 'error') {
+        el.classList.add('error');
+        el.title = 'Last connection attempt failed — click to view logs';
+    }
+    if (eStatus === 'starting') el.classList.add('starting');
+    if (eStatus === 'stopping') el.classList.add('stopping');
+    if (isPortConflict(session)) {
+        el.classList.add('port-conflict');
+        el.title = `Port ${session.localPort} is in use by another process (PID ${session.portPid})`;
+    }
+    if (!isActive(session) && !isBusy(session) && !isPortConflict(session) && eStatus !== 'error') {
+        el.title = 'Inactive — click the power button to connect';
+    }
 
-    const isOn = isActive(session) || session.status === 'stopping';
+    const isOn = isActive(session) || eStatus === 'stopping';
     const conflict = isPortConflict(session);
     const checking = isChecking(session.key);
     const locked = conflict || checking || isBusy(session);
@@ -2604,12 +2771,15 @@ async function rehydrateActiveSessions() {
 
 async function init() {
     console.log('[init] Starting SSM Manager...');
-    await Promise.all([loadConsts(), loadSettings()]);
+    await Promise.all([loadConsts(), loadSettings(), startupHealthCheck()]);
     await fetchSessions();
     renderSidebar();
     activeConsoleKey = SYSTEM_LOG_KEY;
     switchPane('dashboardPane');
     rehydrateActiveSessions(); // non-blocking: populate logs for active tunnels
+    if (!ssmPluginVerified) {
+        showToast('SSM Plugin not found — connections disabled. Go to Advanced to verify.', 'warning', 8000);
+    }
     console.log('[init] SSM Manager ready');
 }
 

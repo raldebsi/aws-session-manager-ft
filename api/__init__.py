@@ -1,7 +1,11 @@
-from flask import Flask, render_template
+import logging
 import os
 import sys
+import time
 
+from flask import Flask, jsonify, render_template, request as flask_request
+
+from api.routes.aws import aws_bp
 from api.routes.configs import configs_bp
 from api.routes.connections import connections_bp
 from api.routes.consts import consts_bp
@@ -25,6 +29,7 @@ def create_app():
     app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
     app.jinja_env.cache = None  # Disable Jinja template caching
 
+    app.register_blueprint(aws_bp)
     app.register_blueprint(configs_bp)
     app.register_blueprint(connections_bp)
     app.register_blueprint(consts_bp)
@@ -36,12 +41,35 @@ def create_app():
     app.register_blueprint(tunnels_bp)
     app.register_blueprint(pipelines_bp)
 
+    _api_logger = logging.getLogger("api")
+
+    @app.before_request
+    def log_request():
+        path = flask_request.path
+        # Skip static files and noisy polling endpoints
+        if path.startswith("/static") or path == "/health":
+            return
+        qs = flask_request.query_string.decode()
+        method = flask_request.method
+        url = f"{path}?{qs}" if qs else path
+        _api_logger.info(f"{method} {url}")
+
+    _cache_version = str(int(time.time()))
+
     @app.route("/")
     def index():
-        return render_template("index.html")
+        return render_template("index.html", cache_version=_cache_version)
 
     @app.route("/health")
     def health():
-        return {"status": "ok"}
+        from src.common import APP_VERSION
+        from src.utils.utils import verify_ssm_plugin
+        ssm_version = verify_ssm_plugin()
+        return jsonify({
+            "status": "ok",
+            "app_version": APP_VERSION,
+            "ssm_installed": ssm_version != "-1",
+            "ssm_version": ssm_version if ssm_version != "-1" else None,
+        })
 
     return app

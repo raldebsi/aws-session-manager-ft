@@ -14,20 +14,20 @@ def get_settings():
 
 @settings_bp.route("", methods=["PUT"])
 def update_settings():
-    """Update settings. Only saves known keys."""
+    """Update settings. Only persists values that differ from defaults."""
     data = request.get_json()
     if not data:
         return jsonify({"error": "Request body is required"}), 400
 
-    current = load_settings()
-
-    # Only update known keys
+    # Only persist keys whose value differs from the default
+    user_overrides = {}
     for key in SETTINGS_DEFAULTS:
-        if key in data:
-            current[key] = data[key]
+        if key in data and data[key] != SETTINGS_DEFAULTS[key]:
+            user_overrides[key] = data[key]
 
-    save_settings(current)
-    return jsonify(current)
+    save_settings(user_overrides)
+    # Return the merged view (overrides + defaults) so the UI sees full settings
+    return jsonify(load_settings())
 
 
 @settings_bp.route("/defaults", methods=["GET"])

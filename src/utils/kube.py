@@ -1,6 +1,7 @@
 import logging
+import subprocess
+import psutil
 import yaml
-
 from typing import Optional
 
 from src.common import tunnel_manager
@@ -195,7 +196,6 @@ def get_k8s_current_context(kubeconfig_path=None):
 
 def _run_cmd_with_timeout(cmd, timeout=10):
     """Run a command with timeout. Returns (stdout, stderr). Kills process tree on timeout."""
-    import subprocess
     process = run_cmd(cmd)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
@@ -203,7 +203,6 @@ def _run_cmd_with_timeout(cmd, timeout=10):
     except subprocess.TimeoutExpired:
         # Kill process + children, then collect remaining output
         try:
-            import psutil
             parent = psutil.Process(process.pid)
             for child in parent.children(recursive=True):
                 child.kill()
@@ -216,7 +215,6 @@ def _run_cmd_with_timeout(cmd, timeout=10):
 
 def k8s_health_check(context=None, kubeconfig_path=None, timeout=10):
     """Check if Kubernetes cluster is reachable by getting the healthz endpoint."""
-    import subprocess
     cmd = ["kubectl", "get", "--raw", "/healthz"]
     cmd += _add_optional_args(context=context, kubeconfig_path=kubeconfig_path)
     try:
@@ -234,7 +232,6 @@ def k8s_health_check(context=None, kubeconfig_path=None, timeout=10):
 
 def get_k8s_nodes(context=None, kubeconfig_path=None, timeout=10):
     """Get the list of Kubernetes nodes using kubectl."""
-    import subprocess
     cmd = ["kubectl", "get", "nodes", "-o", "name"]
     cmd += _add_optional_args(context=context, kubeconfig_path=kubeconfig_path)
     try:

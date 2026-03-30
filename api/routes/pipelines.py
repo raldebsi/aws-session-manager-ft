@@ -3,20 +3,20 @@ import time
 from flask import Blueprint, jsonify, request
 
 from src.common import tunnel_manager, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
-from src.utils.kube import k8s_health_check, start_eks_tunnel
+from src.models.config import SSMConnectionConfig, SSMUserConfig
 from src.utils.data_loaders import load_user_config, load_connections
-from src.utils.utils import get_pid_on_port, kill_pid
-from src.models.config import SSMUserConfig, SSMConnectionConfig
+from src.utils.kube import k8s_health_check, start_eks_tunnel, start_ssm_tunnel
+from src.utils.utils import get_pid_on_port, kill_pid, tcp_health_check
 
 pipelines_bp = Blueprint("pipelines", __name__, url_prefix="/api/pipelines")
 
 
 @pipelines_bp.route("/connect", methods=["POST"])
 def full_connect():
-    """Full connection pipeline: resolve connection -> setup kubeconfig -> update hosts
-    -> update kube cluster config -> start tunnel -> wait for readiness -> verify K8s.
+    """Full connection pipeline: resolve connection -> start tunnel -> wait for readiness -> verify service.
 
-    Body: {"connection_key": "my-connection-key"}
+    Body: {"connection_key": "my-connection-key", "timeout": 15}
+    Works for all connection types (EKS, RDS, EC2, custom).
     """
     data = request.get_json(force=True)
     connection_key = data.get("connection_key")
@@ -44,21 +44,37 @@ def full_connect():
     if not mapped or not mapped.connection:
         return jsonify({"error": "Mapped connection is invalid"}), 400
 
-    steps.append({"step": "resolve_connection", "status": "ok"})
+    conn = mapped.connection
+    conn_type = (conn.type or "eks").lower()
+    is_eks = conn_type == "eks"
 
-    # --- Step 2: Start EKS tunnel (includes kubeconfig setup + hosts update + cluster config) ---
-    tunnel_id = start_eks_tunnel(
-        profile=mapped.profile,
-        endpoint=mapped.connection.endpoint,
-        bastion=mapped.bastion,
-        cluster_name=mapped.connection.cluster,
-        region=mapped.connection.region,
-        tunnel_connection_id=connection_key,
-        document_name=mapped.connection.document,
-        local_port=mapped.local_port,
-        remote_port=mapped.connection.remote_port,
-        kubeconfig_path=mapped.kubeconfig_path,
-    )
+    steps.append({"step": "resolve_connection", "status": "ok", "type": conn_type})
+
+    # --- Step 2: Start tunnel (type-aware) ---
+    if is_eks:
+        tunnel_id = start_eks_tunnel(
+            profile=mapped.profile,
+            endpoint=conn.endpoint,
+            bastion=mapped.bastion,
+            cluster_name=conn.cluster,
+            region=conn.region,
+            tunnel_connection_id=connection_key,
+            document_name=conn.document,
+            local_port=mapped.local_port,
+            remote_port=conn.remote_port,
+            kubeconfig_path=mapped.kubeconfig_path,
+        )
+    else:
+        tunnel_id = start_ssm_tunnel(
+            profile=mapped.profile,
+            endpoint=conn.endpoint,
+            bastion=mapped.bastion,
+            region=conn.region,
+            tunnel_connection_id=connection_key,
+            document_name=conn.document,
+            local_port=mapped.local_port,
+            remote_port=conn.remote_port,
+        )
 
     if tunnel_id is None:
         steps.append({"step": "start_tunnel", "status": "failed"})
@@ -75,11 +91,14 @@ def full_connect():
     start_time = time.time()
     ready = False
     while not ready and (time.time() - start_time) < timeout:
-        output = tunnel_manager.get_output(tunnel_id)
-        for line in output or []:
-            if "Waiting for connections" in line:
-                ready = True
-                break
+        logs, ci = tunnel_manager.get_logs(tunnel_id)
+        if logs:
+            for entry in reversed(logs):
+                if entry.get("ci") != ci:
+                    break
+                if entry.get("type") == "stdout" and "Waiting for connections" in entry.get("text", ""):
+                    ready = True
+                    break
         if not ready:
             time.sleep(1)
 
@@ -93,19 +112,33 @@ def full_connect():
 
     steps.append({"step": "wait_ready", "status": "ok"})
 
-    # --- Step 4: Verify Kubernetes connectivity ---
-    try:
-        health, health_output = k8s_health_check(kubeconfig_path=mapped.kubeconfig_path)
-        if health:
-            steps.append({"step": "verify_k8s", "status": "ok"})
-        else:
-            steps.append({"step": "verify_k8s", "status": "warning", "message": "Kubernetes health check failed", "output": health_output})
-    except Exception as e:
-        steps.append({"step": "verify_k8s", "status": "error", "message": str(e)})
+    # --- Step 4: Verify service connectivity (type-aware) ---
+    if is_eks:
+        try:
+            health, health_output = k8s_health_check(
+                context=connection_key,
+                kubeconfig_path=mapped.kubeconfig_path,
+            )
+            if health:
+                steps.append({"step": "verify_service", "status": "ok"})
+            else:
+                steps.append({"step": "verify_service", "status": "warning", "message": "K8s health check failed", "output": health_output})
+        except Exception as e:
+            steps.append({"step": "verify_service", "status": "error", "message": str(e)})
+    else:
+        try:
+            healthy, detail = tcp_health_check(port=mapped.local_port, timeout=5)
+            if healthy:
+                steps.append({"step": "verify_service", "status": "ok", "detail": detail})
+            else:
+                steps.append({"step": "verify_service", "status": "warning", "detail": detail})
+        except Exception as e:
+            steps.append({"step": "verify_service", "status": "error", "message": str(e)})
 
     return jsonify({
         "tunnel_id": tunnel_id,
         "connection_key": connection_key,
+        "type": conn_type,
         "steps": steps,
     })
 
@@ -120,7 +153,6 @@ def full_disconnect():
     tunnel_id = data.get("tunnel_id")
 
     if not tunnel_id:
-        # Try to find by connection_key prefix
         connection_key = data.get("connection_key")
         if not connection_key:
             return jsonify({"error": "tunnel_id or connection_key is required"}), 400

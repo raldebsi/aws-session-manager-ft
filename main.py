@@ -1,16 +1,15 @@
-import os
 import sys
 import time
-from src.utils.utils import ensure_elevated_privileges
-from src.utils.data_loaders import load_user_config, load_connections
-from src.models.config import SSMUserConfig, SSMConnectionConfig
-from src.utils.kube import k8s_health_check, start_eks_tunnel
+
 from src.common import tunnel_manager, logger, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
+from src.models.config import SSMUserConfig, SSMConnectionConfig
+from src.utils.data_loaders import load_user_config, load_connections
+from src.utils.kube import k8s_health_check, start_eks_tunnel, start_ssm_tunnel
+from src.utils.utils import tcp_health_check
 
 tunnel_manager.register_shutdown_handler()
 
 def main():
-    # ensure_elevated_privileges() # No longer using hosts -> not need
     try:
         user_config: SSMUserConfig = load_user_config(USER_CONFIG_PATH)
         connections: SSMConnectionConfig = load_connections(CONNECTIONS_CONFIG_PATH)
@@ -56,19 +55,36 @@ def main():
             logger.error("Mapped connection is invalid.")
             continue
 
-        logger.info(f"Starting tunnel for {mapped.connection_name or mapped.connection_id}")
-        tunnel_id = start_eks_tunnel(
-            profile=mapped.profile,
-            endpoint=mapped.connection.endpoint,
-            bastion=mapped.bastion,
-            cluster_name=mapped.connection.cluster,
-            region=mapped.connection.region,
-            tunnel_connection_id=connection_tunnel_name,
-            document_name=mapped.connection.document,
-            local_port=mapped.local_port,
-            remote_port=mapped.connection.remote_port,
-            kubeconfig_path=mapped.kubeconfig_path,
-        )
+        conn = mapped.connection
+        conn_type = (conn.type or "eks").lower()
+        is_eks = conn_type == "eks"
+
+        logger.info(f"Starting {conn_type.upper()} tunnel for {mapped.connection_name or mapped.connection_id}")
+
+        if is_eks:
+            tunnel_id = start_eks_tunnel(
+                profile=mapped.profile,
+                endpoint=conn.endpoint,
+                bastion=mapped.bastion,
+                cluster_name=conn.cluster,
+                region=conn.region,
+                tunnel_connection_id=connection_tunnel_name,
+                document_name=conn.document,
+                local_port=mapped.local_port,
+                remote_port=conn.remote_port,
+                kubeconfig_path=mapped.kubeconfig_path,
+            )
+        else:
+            tunnel_id = start_ssm_tunnel(
+                profile=mapped.profile,
+                endpoint=conn.endpoint,
+                bastion=mapped.bastion,
+                region=conn.region,
+                tunnel_connection_id=connection_tunnel_name,
+                document_name=conn.document,
+                local_port=mapped.local_port,
+                remote_port=conn.remote_port,
+            )
 
         if tunnel_id is None:
             print("Failed to start tunnel. Check logs for details.")
@@ -78,31 +94,52 @@ def main():
             print("Tunnel for this connection is already running.")
             continue
 
+        # Wait for readiness
         timeout = 15
-        time_now = time.time()
-        found = False
-        while not found:
-            output = tunnel_manager.get_output(tunnel_id)
-            for line in output or []:
-                if "Waiting for connections" in line:
-                    found = True
-                    break
-            if time.time() - time_now > timeout:
-                logger.error("Timeout waiting for tunnel to start.")
-                break
-            time.sleep(1)
-        print("Tunnel started successfully. Verifying Kubernetes connection...")
-        if tunnel_id:
+        start_time = time.time()
+        ready = False
+        while not ready and (time.time() - start_time) < timeout:
+            logs, ci = tunnel_manager.get_logs(tunnel_id)
+            if logs:
+                for entry in reversed(logs):
+                    if entry.get("ci") != ci:
+                        break
+                    if entry.get("type") == "stdout" and "Waiting for connections" in entry.get("text", ""):
+                        ready = True
+                        break
+            if not ready:
+                time.sleep(1)
+
+        if not ready:
+            logger.error("Timeout waiting for tunnel to start.")
+            continue
+
+        print("Tunnel started successfully.")
+
+        # Type-aware health check
+        if is_eks:
+            print("Verifying Kubernetes connection...")
             try:
-                healthcheck, healthcheck_output = k8s_health_check()
-                if not healthcheck:
-                    print("Kubernetes health check failed.")
-                    continue
-                print("Kubernetes Connection Verified.")
+                healthcheck, healthcheck_output = k8s_health_check(
+                    context=connection_tunnel_name,
+                    kubeconfig_path=mapped.kubeconfig_path,
+                )
+                if healthcheck:
+                    print("Kubernetes Connection Verified.")
+                else:
+                    print(f"Kubernetes health check failed: {healthcheck_output}")
             except Exception as e:
                 print(f"Error verifying Kubernetes connection: {e}")
         else:
-            print("Failed to start tunnel.")
+            print(f"Verifying {conn_type.upper()} connectivity on port {mapped.local_port}...")
+            try:
+                healthy, detail = tcp_health_check(port=mapped.local_port, timeout=5)
+                if healthy:
+                    print(f"Service connectivity verified: {detail}")
+                else:
+                    print(f"Service connectivity check failed: {detail}")
+            except Exception as e:
+                print(f"Error verifying service connectivity: {e}")
 
 if __name__ == "__main__":
     main()

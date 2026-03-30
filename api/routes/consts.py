@@ -1,8 +1,12 @@
+import os
+import tkinter as tk
+from tkinter import filedialog
+
 import pyperclip
 from flask import Blueprint, jsonify, request
 
 from src.common import SETTINGS_DEFAULTS
-from src.utils.utils import get_pid_on_port, kill_pid, get_aws_profiles_by_file, get_aws_profiles_by_cli
+from src.utils.utils import get_pid_on_port, kill_pid, resolve_absolute_path
 
 consts_bp = Blueprint("consts", __name__, url_prefix="/api/consts")
 
@@ -127,32 +131,6 @@ def pid_kill(pid):
     return jsonify({"pid": pid, "killed": False, "error": "Failed to kill process"}), 500
 
 
-@consts_bp.route("/aws/profiles", methods=["GET"])
-def aws_profiles():
-    """Get AWS profiles from credentials file and CLI. Returns deduplicated merged list."""
-    file_profiles = get_aws_profiles_by_file()
-    cli_profiles = get_aws_profiles_by_cli()
-    seen = set()
-    merged = []
-    for p in file_profiles + cli_profiles:
-        if p not in seen:
-            seen.add(p)
-            merged.append(p)
-    return jsonify({"profiles": merged, "sources": {"file": file_profiles, "cli": cli_profiles}})
-
-
-@consts_bp.route("/aws/profiles/file", methods=["GET"])
-def aws_profiles_file():
-    """Get AWS profiles from ~/.aws/credentials file."""
-    return jsonify({"profiles": get_aws_profiles_by_file()})
-
-
-@consts_bp.route("/aws/profiles/cli", methods=["GET"])
-def aws_profiles_cli():
-    """Get AWS profiles using AWS CLI."""
-    return jsonify({"profiles": get_aws_profiles_by_cli()})
-
-
 @consts_bp.route("/browse-save", methods=["POST"])
 def browse_save():
     """Open a native save-as dialog. User picks a folder and names the file.
@@ -163,16 +141,13 @@ def browse_save():
     initial_dir = data.get("initial_dir", ".")
     default_name = data.get("default_name", "config")
 
-    import os
-    initial_dir = os.path.abspath(os.path.expanduser(initial_dir))
+    initial_dir = resolve_absolute_path(initial_dir)
     if not os.path.isdir(initial_dir):
         initial_dir = os.getcwd()
 
     filetypes = data.get("filetypes", [["All files", "*.*"]])
 
     try:
-        import tkinter as tk
-        from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
         root.attributes('-topmost', True)
@@ -197,14 +172,11 @@ def browse_folder():
     title = data.get("title", "Select folder")
     initial_dir = data.get("initial_dir", ".")
 
-    import os
-    initial_dir = os.path.abspath(os.path.expanduser(initial_dir))
+    initial_dir = resolve_absolute_path(initial_dir)
     if not os.path.isdir(initial_dir):
         initial_dir = os.getcwd()
 
     try:
-        import tkinter as tk
-        from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
         root.attributes('-topmost', True)
@@ -220,7 +192,6 @@ def browse_folder():
 @consts_bp.route("/save-file", methods=["POST"])
 def save_file():
     """Write content to folder/filename. Body: {folder, filename, content}."""
-    import os
     data = request.get_json(force=True)
     folder = data.get("folder")
     filename = data.get("filename")
