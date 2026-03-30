@@ -25,12 +25,12 @@
 - [X] System console should respect the log limit if not already
 - [X] Reduce default timeout from 10s to 5s in the settings' consts.
 - [X] Make the settings page only save variables that the user edited, this way updating defaults reflects on the user. Make sure the functions that modify and read the settings yaml file fallback to proper defaults when their keys are missing a value.
-- [ ] Cleanup:
-  - [ ] Update the pipelines route and old routes to match our new formats and behavior for other functions
-  - [ ] Update main.py similar to the task above.
+- [X] Cleanup:
+  - [X] Update the pipelines route and old routes to match our new formats and behavior for other functions
+  - [X] Update main.py similar to the task above.
   - [X] Check everything that is importing inside a function and move the import to the top of the file properly.
   - [X] Move through the entire app and detect small utils that are re-created too many items and convert them to helper functions if not found or else use the helper, such as detecting the OS and so on.
-  - [ ] Sort imports as so: first comes the `import X`. Then comes the `from X import Y` with a line break in between. Then finally comes the local imports.
+  - [X] Sort imports as so: first comes the `import X`. Then comes the `from X import Y` with a line break in between. Then finally comes the local imports.
 - [X] Closing a tab sometimes just changes the circle's color
 - [X] Logs are no longer auto updating in the "Logs" page until I go to a different tab and come back, this is not an issue since logs are meant to be paused, but add a refresh button to re-render ONLY THIS LOG TAB.
 - [X] When a connection is not used it's grayed out, but we forgot to tell the user why it's grayed out.
@@ -41,3 +41,5 @@
   - [X] New error -> I tried enabling 2 connections at once, once the first spinner was done it somehow removed the 2nd spinner. In other words, the spinners of different connections are linked together even though they're unrelated. New update: The spin for the one that was called first worked, but the 2nd one is now stuck instead. I don't think your solution was right, it was hacky to begin with. Hint: Moving to a different tab and coming back unstucks it, so you most likely already have the state for it.
 - [X] Toasts backgrounds are too transparent they're not readable
 - [X] Log every api call by updating a flask decorator to detect all routes being called with their url params (but not body).
+- [ ] Console tabs and Logs page tabs should scroll horizontally instead of expanding the width
+- [ ] Logs page tabs not yet tested — need to verify tabs in the logs page work
