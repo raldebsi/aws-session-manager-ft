@@ -591,6 +591,26 @@ hr {
     border-radius: 3px;
 }
 
+.dashboard-group-activate {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--inactive-text);
+    cursor: pointer;
+    font-size: 0.7em;
+    margin-left: auto;
+    transition: background 0.15s, color 0.15s;
+}
+.dashboard-group-activate:hover {
+    background: var(--highlight-bg-light);
+    color: var(--warning);
+}
+
 .dashboard-group-cards {
     display: flex;
     flex-wrap: wrap;
@@ -644,6 +664,8 @@ hr {
     align-items: center;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .console-actions {
@@ -676,6 +698,7 @@ hr {
     border-bottom: 2px solid transparent;
     cursor: pointer;
     white-space: nowrap;
+    flex-shrink: 0;
     transition: color 0.15s, border-color 0.15s;
 }
 .console-tab:hover {
@@ -772,7 +795,9 @@ hr {
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     overflow-x: auto;
+    overflow-y: hidden;
     align-items: center;
+    max-width: 100%;
 }
 
 .logs-page-actions {
@@ -794,6 +819,7 @@ hr {
     font-weight: 500;
     cursor: pointer;
     white-space: nowrap;
+    flex-shrink: 0;
     transition: color 0.15s, border-color 0.15s;
 }
 .logs-page-tab:hover {
@@ -1331,18 +1357,6 @@ hr {
 }
 
 /* Card action buttons */
-.conn-card-actions {
-    display: flex;
-    gap: 2px;
-    margin-left: auto;
-    flex-shrink: 0;
-    opacity: 0;
-    transition: opacity 0.15s;
-}
-.conn-card:hover .conn-card-actions {
-    opacity: 1;
-}
-
 .conn-action-btn {
     display: flex;
     align-items: center;
@@ -1988,6 +2002,226 @@ hr {
 @keyframes toast-out {
     from { opacity: 1; transform: translateY(0); }
     to   { opacity: 0; transform: translateY(8px); }
+}
+
+/* --- Section title inline action button --- */
+
+.conn-list-section-title.conn-list-collapsible {
+    cursor: pointer;
+    user-select: none;
+}
+.conn-list-chevron {
+    font-size: 0.6em;
+    color: var(--inactive-text);
+    transition: transform 0.2s;
+    width: 10px;
+    text-align: center;
+}
+.conn-list-section-title.collapsed .conn-list-chevron {
+    transform: rotate(-90deg);
+}
+.conn-list-section-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--inactive-text);
+    cursor: pointer;
+    font-size: 0.75em;
+    transition: background 0.15s, color 0.15s;
+}
+.conn-list-section-action:hover {
+    background: var(--highlight-bg-light);
+    color: var(--accent);
+}
+
+/* --- Group cards --- */
+
+.group-card .conn-card-icon {
+    background: var(--accent);
+    color: var(--text);
+}
+
+/* --- Group editor: member list --- */
+
+.group-members-section {
+    margin-top: 12px;
+}
+.group-members-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.group-members-title {
+    font-size: 0.8em;
+    font-weight: 600;
+    color: var(--inactive-text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.group-members-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+.group-member-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--highlight-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    border-left: 3px solid var(--accent);
+}
+.group-member-name {
+    font-size: 0.85em;
+    font-weight: 500;
+    color: var(--text);
+    flex: 1;
+}
+.group-member-port {
+    font-size: 0.75em;
+    color: var(--inactive-text);
+    font-family: 'Inter', monospace;
+}
+.group-member-remove {
+    width: 22px !important;
+    height: 22px !important;
+    font-size: 0.7em !important;
+}
+
+/* --- Connection picker overlay --- */
+
+.picker-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 90;
+    backdrop-filter: blur(4px);
+}
+.picker-modal {
+    background: var(--primary-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    width: 380px;
+    max-height: 420px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.picker-title {
+    font-size: 0.9em;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.picker-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 12px;
+}
+.picker-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.picker-item:hover:not(.disabled) {
+    background: var(--highlight-bg);
+}
+.picker-item.disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+.picker-item-name {
+    font-size: 0.85em;
+    font-weight: 500;
+    color: var(--text);
+    flex: 1;
+}
+.picker-item-port {
+    font-size: 0.75em;
+    color: var(--inactive-text);
+    font-family: 'Inter', monospace;
+}
+.picker-reason {
+    font-size: 0.7em;
+    color: var(--warning);
+    font-style: italic;
+}
+.picker-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* --- Fancy connection card buttons (car-button style with left border per button) --- */
+
+.conn-card-actions {
+    margin-left: auto;
+    align-self: stretch;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.conn-card:hover .conn-card-actions {
+    opacity: 1;
+}
+.conn-card-actions .conn-action-btn {
+    /* border-left: 2px solid var(--inactive-text); */
+    border-radius: 0;
+    height: auto;
+    align-self: stretch;
+    padding: 0 10px;
+}
+.conn-card-actions .conn-action-btn:hover {
+    border-left-color: var(--inactive-text);
+}
+.conn-card-actions .conn-action-btn:last-child {
+    border-radius: 0 6px 6px 0;
+}
+
+/* --- Themed scrollbars --- */
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent) transparent;
+}
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: var(--accent);
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text);
 }
 
 @media (max-width: 960px), (max-height: 800px) {

@@ -8,6 +8,7 @@ from flask import Flask, jsonify, render_template, request as flask_request
 from api.routes.aws import aws_bp
 from api.routes.configs import configs_bp
 from api.routes.connections import connections_bp
+from api.routes.groups import groups_bp
 from api.routes.consts import consts_bp
 from api.routes.hosts import hosts_bp
 from api.routes.kube import kube_bp
@@ -31,6 +32,7 @@ def create_app():
 
     app.register_blueprint(aws_bp)
     app.register_blueprint(configs_bp)
+    app.register_blueprint(groups_bp)
     app.register_blueprint(connections_bp)
     app.register_blueprint(consts_bp)
     app.register_blueprint(hosts_bp)

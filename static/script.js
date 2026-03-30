@@ -638,8 +638,7 @@ async function connectSession(session) {
 async function fetchAndAppendLogs(key) {
     try {
         const session = sessions.find(s => s.key === key);
-        const tunnelId = session?.tunnelId;
-        if (!tunnelId) return;
+        const tunnelId = session?.tunnelId || key;
 
         const tab = consoleTabs[key];
         if (!tab) return;
@@ -673,7 +672,7 @@ function renderAll() {
 
 // === DASHBOARD PANE ===
 
-let dashboardView = 'grouped';
+let dashboardView = 'region';
 let dashboardQuery = '';
 
 const sessionSearchIndex = new WeakMap();
@@ -702,7 +701,7 @@ function filterSessions(query) {
 
 async function renderDashboard() {
     console.log('[dashboard] Rendering dashboard');
-    const [html] = await Promise.all([fetchPage('dashboard'), fetchSessions()]);
+    const [html] = await Promise.all([fetchPage('dashboard'), fetchSessions(), fetchGroups()]);
     mainContentBody.innerHTML = html;
 
     const searchInput = document.getElementById('dashboardSearch');
@@ -748,6 +747,8 @@ function refreshDashboardContent() {
 
     if (dashboardView === 'all') {
         renderAllView(container, filtered);
+    } else if (dashboardView === 'group') {
+        renderGroupView(container, filtered);
     } else {
         const groupKeys = { grouped: 'connectionId', region: 'region', type: 'type' };
         renderGroupedView(container, filtered, groupKeys[dashboardView] || 'connectionId');
@@ -841,6 +842,84 @@ function renderAllView(container, filtered) {
     group.appendChild(header);
     group.appendChild(cards);
     container.appendChild(group);
+}
+
+function renderGroupView(container, filtered) {
+    const groups = groupsCache || {};
+    const groupKeys = Object.keys(groups);
+
+    if (groupKeys.length === 0) {
+        container.innerHTML = '<div class="dashboard-no-results"><i class="fa-solid fa-object-group"></i> No groups defined. Create groups in the Connections page.</div>';
+        return;
+    }
+
+    // Sessions keyed by their key for fast lookup
+    const sessionMap = {};
+    filtered.forEach(s => { sessionMap[s.key] = s; });
+
+    // "Ungrouped" — sessions not in any group
+    const groupedKeys = new Set();
+    groupKeys.forEach(gk => (groups[gk].connections || []).forEach(k => groupedKeys.add(k)));
+
+    groupKeys.forEach(gk => {
+        const g = groups[gk];
+        const memberSessions = (g.connections || []).map(k => sessionMap[k]).filter(Boolean);
+        if (memberSessions.length === 0) return;
+
+        const groupEl = document.createElement('div');
+        groupEl.className = 'dashboard-group';
+
+        const activeCount = memberSessions.filter(s => isActive(s)).length;
+        const header = document.createElement('div');
+        header.className = 'dashboard-group-header';
+        header.innerHTML = `
+            <i class="fa-solid fa-chevron-down dashboard-group-chevron"></i>
+            <span class="dashboard-group-name">${g.name}</span>
+            <span class="dashboard-group-badge">${activeCount}/${memberSessions.length} active</span>
+            <button class="dashboard-group-activate" title="Activate all in group"><i class="fa-solid fa-bolt"></i></button>
+        `;
+
+        const cards = document.createElement('div');
+        cards.className = 'dashboard-group-cards';
+        memberSessions.forEach(s => cards.appendChild(createDashboardCard(s)));
+
+        header.querySelector('.dashboard-group-activate').addEventListener('click', (e) => {
+            e.stopPropagation();
+            activateGroup(g);
+        });
+        header.addEventListener('click', () => {
+            header.classList.toggle('collapsed');
+            cards.style.display = header.classList.contains('collapsed') ? 'none' : '';
+        });
+
+        groupEl.appendChild(header);
+        groupEl.appendChild(cards);
+        container.appendChild(groupEl);
+    });
+
+    // Ungrouped
+    const ungrouped = filtered.filter(s => !groupedKeys.has(s.key));
+    if (ungrouped.length > 0) {
+        const groupEl = document.createElement('div');
+        groupEl.className = 'dashboard-group';
+        const header = document.createElement('div');
+        header.className = 'dashboard-group-header';
+        header.innerHTML = `
+            <i class="fa-solid fa-chevron-down dashboard-group-chevron"></i>
+            <span class="dashboard-group-name">Ungrouped</span>
+            <span class="dashboard-group-badge">${ungrouped.length}</span>
+        `;
+        const cards = document.createElement('div');
+        cards.className = 'dashboard-group-cards';
+        ungrouped.forEach(s => cards.appendChild(createDashboardCard(s)));
+        header.addEventListener('click', () => {
+            header.classList.toggle('collapsed');
+            cards.style.display = header.classList.contains('collapsed') ? 'none' : '';
+        });
+        groupEl.appendChild(header);
+        groupEl.appendChild(cards);
+        container.appendChild(groupEl);
+    }
 }
 
 function healthIndicatorsHtml(session) {
@@ -983,19 +1062,22 @@ async function renderLogsPage() {
     const tabsBar = document.createElement('div');
     tabsBar.className = 'logs-page-tabs';
 
-    // Gather keys that have backend logs
+    // Gather keys that have backend logs (try all sessions — tunnel may persist from previous run)
     const tunnelKeys = [];
-    for (const s of sessions) {
+    const logFetches = sessions.map(async (s) => {
         try {
-            const res = await fetch(`/api/tunnels/${s.tunnelId || s.key}/logs`);
+            const res = await fetch(`/api/tunnels/${s.key}/logs`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.logs && data.logs.length > 0) {
-                    tunnelKeys.push({ key: s.key, name: s.name, ci: data.connection_index, logs: data.logs });
+                    return { key: s.key, name: s.name, ci: data.connection_index, logs: data.logs };
                 }
             }
         } catch {}
-    }
+        return null;
+    });
+    const results = await Promise.all(logFetches);
+    results.forEach(r => { if (r) tunnelKeys.push(r); });
 
     // System tab always first
     const allTabs = [{ key: SYSTEM_LOG_KEY, name: 'System', ci: null, logs: null }, ...tunnelKeys];
@@ -1407,10 +1489,19 @@ async function fetchUsedPorts() {
     return usedPortsCache;
 }
 
+let groupsCache = null;
+
+async function fetchGroups() {
+    const res = await fetch('/api/groups');
+    groupsCache = await res.json();
+    return groupsCache;
+}
+
 function invalidateCaches() {
     connectionsCache = null;
     userConnectionsCache = null;
     usedPortsCache = null;
+    groupsCache = null;
 }
 
 async function goBackToConnections() {
@@ -1448,8 +1539,8 @@ async function renderConnections() {
     mainContentBody.innerHTML = '<div class="conn-empty"><i class="fa-solid fa-spinner fa-spin"></i>&nbsp; Loading...</div>';
 
     try {
-        const [html, connections, userConnections, usedPorts] = await Promise.all([
-            fetchPage('connections'), fetchConnections(), fetchUserConnections(), fetchUsedPorts()
+        const [html, connections, userConnections, usedPorts, groups] = await Promise.all([
+            fetchPage('connections'), fetchConnections(), fetchUserConnections(), fetchUsedPorts(), fetchGroups()
         ]);
 
         mainContentBody.innerHTML = html;
@@ -1465,6 +1556,44 @@ async function renderConnections() {
         }
 
         const duplicates = findDuplicateConnections(connections);
+
+        // Groups list
+        const groupsListEl = document.getElementById('groupsList');
+        const groupKeys = Object.keys(groups);
+        if (groupKeys.length === 0) {
+            groupsListEl.innerHTML = '<div class="conn-empty">No groups yet</div>';
+        } else {
+            groupKeys.forEach(key => {
+                const group = groups[key];
+                const memberCount = (group.connections || []).length;
+                const card = document.createElement('div');
+                card.className = 'conn-card group-card';
+                card.innerHTML = `
+                    <div class="conn-card-icon"><i class="fa-solid fa-object-group"></i></div>
+                    <div class="conn-card-info">
+                        <div class="conn-card-name">${group.name}</div>
+                        <div class="conn-card-detail">${memberCount} connection${memberCount !== 1 ? 's' : ''}</div>
+                    </div>
+                    <div class="conn-card-actions">
+                        <button class="conn-action-btn" data-action="activate" title="Activate all"><i class="fa-solid fa-bolt"></i></button>
+                        <button class="conn-action-btn delete" data-action="delete" title="Delete group"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                `;
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.conn-action-btn')) return;
+                    renderEditGroupForm(group, key);
+                });
+                card.querySelector('[data-action="activate"]').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    activateGroup(group);
+                });
+                card.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    handleDeleteGroup(key, group.name);
+                });
+                groupsListEl.appendChild(card);
+            });
+        }
 
         // Connections list
         const connListEl = document.getElementById('connectionsList');
@@ -1501,6 +1630,20 @@ async function renderConnections() {
         document.getElementById('createConnBtn').addEventListener('click', () => renderCreateConnectionForm());
         document.getElementById('createUserConnBtn').addEventListener('click', () => renderCreateUserConnectionForm());
         document.getElementById('importConnBtn').addEventListener('click', () => renderImportForm());
+        document.getElementById('createGroupBtn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            renderEditGroupForm();
+        });
+
+        // Collapsible section titles
+        document.querySelectorAll('.conn-list-collapsible').forEach(title => {
+            title.addEventListener('click', () => {
+                const targetId = title.dataset.target;
+                const target = document.getElementById(targetId);
+                title.classList.toggle('collapsed');
+                target.style.display = title.classList.contains('collapsed') ? 'none' : '';
+            });
+        });
 
     } catch (err) {
         mainContentBody.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Failed to load connections: ${err.message}</div>`;
@@ -1580,7 +1723,35 @@ function createConnCard(data, type, key, flags = {}) {
 // --- Card actions ---
 
 async function handleDelete(type, key, name) {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    // Build dependency warnings
+    const warnings = [];
+
+    if (type === 'connection') {
+        // Check if user connections reference this connection
+        const ucs = userConnectionsCache || await fetchUserConnections();
+        const dependents = Object.entries(ucs).filter(([, uc]) => uc.connection_id === key);
+        if (dependents.length > 0) {
+            const names = dependents.map(([, uc]) => uc.connection_name || 'unnamed').join(', ');
+            warnings.push(`${dependents.length} user connection(s) reference this: ${names}`);
+        }
+    }
+
+    if (type === 'user') {
+        // Check if any groups reference this user connection
+        const groups = groupsCache || await fetchGroups();
+        const inGroups = Object.entries(groups).filter(([, g]) => (g.connections || []).includes(key));
+        if (inGroups.length > 0) {
+            const groupNames = inGroups.map(([, g]) => g.name).join(', ');
+            warnings.push(`Used in ${inGroups.length} group(s): ${groupNames}`);
+        }
+    }
+
+    let msg = `Delete "${name}"? This cannot be undone.`;
+    if (warnings.length > 0) {
+        msg += `\n\nWarning:\n- ${warnings.join('\n- ')}`;
+    }
+
+    if (!confirm(msg)) return;
     const kind = type === 'connection' ? '' : '/user';
     const res = await fetch(`/api/configs${kind}/${key}`, { method: 'DELETE' });
     if (!res.ok) {
@@ -2137,6 +2308,206 @@ function detectKind(data) {
     if (data.region && data.endpoint && data.type) return 'connection';
     if (data.connection_id && data.bastion_id) return 'user';
     return null;
+}
+
+// === GROUPS ===
+
+async function handleDeleteGroup(key, name) {
+    if (!confirm(`Delete group "${name}"? This cannot be undone.`)) return;
+    const res = await fetch(`/api/groups/${key}`, { method: 'DELETE' });
+    if (!res.ok) {
+        const data = await res.json();
+        showToast(data.error || 'Failed to delete group', 'error');
+        return;
+    }
+    showToast(`Deleted group "${name}"`, 'success');
+    invalidateCaches();
+    goBackToConnections();
+}
+
+async function activateGroup(group) {
+    const keys = group.connections || [];
+    if (keys.length === 0) {
+        showToast('Group has no connections', 'warning');
+        return;
+    }
+    const toActivate = keys.filter(k => {
+        const s = sessions.find(s => s.key === k);
+        return s && !isActive(s) && !isBusy(s);
+    });
+    if (toActivate.length === 0) {
+        showToast('All connections in this group are already active or busy', 'info');
+        return;
+    }
+    showToast(`Activating ${toActivate.length} connection(s)...`, 'info');
+    for (const key of toActivate) {
+        const s = sessions.find(s => s.key === key);
+        if (s) toggleSession(s);
+    }
+}
+
+async function renderEditGroupForm(editData = null, editKey = null) {
+    mainContentBody.innerHTML = '';
+    const isEdit = editData !== null && editKey !== null;
+    mainTopbarTitle.textContent = isEdit ? 'Edit Group' : 'New Group';
+
+    const [html, userConnections] = await Promise.all([
+        fetchPage('edit_group'), fetchUserConnections()
+    ]);
+    mainContentBody.innerHTML = html;
+
+    if (isEdit) {
+        document.getElementById('formTitleText').textContent = 'Edit Group';
+        document.getElementById('editBadge').style.display = '';
+        document.getElementById('saveGroupIcon').className = 'fa-solid fa-pen';
+        document.getElementById('saveGroupLabel').textContent = 'Update';
+    }
+
+    const nameInput = document.getElementById('groupName');
+    let memberKeys = [];
+
+    if (editData) {
+        nameInput.value = editData.name || '';
+        memberKeys = [...(editData.connections || [])];
+    }
+
+    clearFormDirty();
+
+    function renderMembers() {
+        const list = document.getElementById('groupMembersList');
+        list.innerHTML = '';
+        if (memberKeys.length === 0) {
+            list.innerHTML = '<div class="conn-empty">No connections added yet</div>';
+            return;
+        }
+        memberKeys.forEach((key, idx) => {
+            const uc = userConnections[key];
+            const name = uc ? (uc.connection_name || key) : key;
+            const port = uc ? uc.local_port : '?';
+            const item = document.createElement('div');
+            item.className = 'group-member-item';
+            item.innerHTML = `
+                <span class="group-member-name">${name}</span>
+                <span class="group-member-port">:${port}</span>
+                <button class="conn-action-btn delete group-member-remove" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+            `;
+            item.querySelector('.group-member-remove').addEventListener('click', () => {
+                memberKeys.splice(idx, 1);
+                markFormDirty();
+                renderMembers();
+            });
+            list.appendChild(item);
+        });
+    }
+    renderMembers();
+
+    document.getElementById('addToGroupBtn').addEventListener('click', () => {
+        showConnectionPicker(userConnections, memberKeys, (selectedKey) => {
+            memberKeys.push(selectedKey);
+            markFormDirty();
+            renderMembers();
+        });
+    });
+
+    nameInput.addEventListener('input', markFormDirty);
+    document.getElementById('cancelGroupBtn').addEventListener('click', () => {
+        if (confirmIfDirty()) goBackToConnections();
+    });
+    document.getElementById('saveGroupBtn').addEventListener('click', async () => {
+        const msgEl = document.getElementById('formMessage');
+        msgEl.innerHTML = '';
+        const name = nameInput.value.trim();
+        if (!name) {
+            msgEl.innerHTML = '<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> Name is required</div>';
+            return;
+        }
+        const body = { name, connections: memberKeys };
+        const url = isEdit ? `/api/groups/${editKey}` : '/api/groups';
+        const method = isEdit ? 'PUT' : 'POST';
+        try {
+            const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const data = await res.json();
+            if (!res.ok) {
+                msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${data.error}</div>`;
+                return;
+            }
+            clearFormDirty();
+            showToast(`Group "${name}" ${isEdit ? 'updated' : 'created'}`, 'success');
+            invalidateCaches();
+            setTimeout(goBackToConnections, 600);
+        } catch (err) {
+            msgEl.innerHTML = `<div class="form-error"><i class="fa-solid fa-circle-exclamation"></i> ${err.message}</div>`;
+        }
+    });
+}
+
+function showConnectionPicker(userConnections, existingKeys, onSelect) {
+    document.querySelector('.picker-overlay')?.remove();
+
+    // Build list of ports already in the group
+    const usedPorts = new Set();
+    existingKeys.forEach(k => {
+        const uc = userConnections[k];
+        if (uc) usedPorts.add(uc.local_port);
+    });
+
+    const overlay = document.createElement('div');
+    overlay.className = 'picker-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'picker-modal';
+    modal.innerHTML = `
+        <div class="picker-title"><i class="fa-solid fa-plus"></i> Add Connection to Group</div>
+        <div class="picker-list"></div>
+        <div class="picker-actions">
+            <button class="conn-btn secondary" id="pickerCloseBtn">Cancel</button>
+        </div>
+    `;
+
+    const list = modal.querySelector('.picker-list');
+
+    // Sort: available first, clashing/already-added at bottom
+    const allKeys = Object.keys(userConnections);
+    const sortedKeys = allKeys.sort((a, b) => {
+        const aDisabled = existingKeys.includes(a) || usedPorts.has(userConnections[a].local_port);
+        const bDisabled = existingKeys.includes(b) || usedPorts.has(userConnections[b].local_port);
+        if (aDisabled && !bDisabled) return 1;
+        if (!aDisabled && bDisabled) return -1;
+        return 0;
+    });
+
+    sortedKeys.forEach(key => {
+        const uc = userConnections[key];
+        const name = uc.connection_name || key;
+        const port = uc.local_port;
+        const alreadyAdded = existingKeys.includes(key);
+        const portClash = !alreadyAdded && usedPorts.has(port);
+        const disabled = alreadyAdded || portClash;
+
+        const item = document.createElement('div');
+        item.className = `picker-item${disabled ? ' disabled' : ''}`;
+        let reason = '';
+        if (alreadyAdded) reason = '<span class="picker-reason">Already in group</span>';
+        else if (portClash) reason = `<span class="picker-reason">Port ${port} clashes</span>`;
+
+        item.innerHTML = `
+            <span class="picker-item-name">${name}</span>
+            <span class="picker-item-port">:${port}</span>
+            ${reason}
+        `;
+
+        if (!disabled) {
+            item.addEventListener('click', () => {
+                onSelect(key);
+                overlay.remove();
+            });
+        }
+        list.appendChild(item);
+    });
+
+    overlay.appendChild(modal);
+    document.querySelector('.main-content').appendChild(overlay);
+    modal.querySelector('#pickerCloseBtn').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
 
 // === CLIPBOARD ===
@@ -2758,13 +3129,23 @@ document.getElementById('consoleSaveBtn').addEventListener('click', async () => 
 
 // === STARTUP ===
 
-async function rehydrateActiveSessions() {
-    const activeSessions = sessions.filter(s => s.status === 'active' && s.tunnelId);
-    console.log(`[init] Rehydrating ${activeSessions.length} active session(s)...`);
-    for (const session of activeSessions) {
-        console.log(`[init] Rehydrating logs for ${session.key}`);
-        ensureConsoleTab(session.key);
-        await fetchAndAppendLogs(session.key);
+async function rehydrateSessions() {
+    // Try to rehydrate logs for ALL sessions — tunnels may persist from previous app run
+    console.log(`[init] Rehydrating logs for ${sessions.length} session(s)...`);
+    for (const session of sessions) {
+        try {
+            const res = await fetch(`/api/tunnels/${session.key}/logs`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.logs && data.logs.length > 0) {
+                    console.log(`[init] Found ${data.logs.length} log(s) for ${session.key}`);
+                    const tab = ensureConsoleTab(session.key);
+                    tab._lastLogCount = 0;
+                    data.logs.forEach(entry => appendLog(tab, { stream: entry.type, text: entry.text }));
+                    tab._lastLogCount = data.logs.length;
+                }
+            }
+        } catch { /* non-critical */ }
     }
     console.log('[init] Rehydration complete');
 }
@@ -2776,7 +3157,7 @@ async function init() {
     renderSidebar();
     activeConsoleKey = SYSTEM_LOG_KEY;
     switchPane('dashboardPane');
-    rehydrateActiveSessions(); // non-blocking: populate logs for active tunnels
+    rehydrateSessions(); // non-blocking: populate logs for all sessions with tunnel data
     if (!ssmPluginVerified) {
         showToast('SSM Plugin not found — connections disabled. Go to Advanced to verify.', 'warning', 8000);
     }

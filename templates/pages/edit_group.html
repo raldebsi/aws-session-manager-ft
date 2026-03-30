@@ -1,0 +1,31 @@
+<div class="form-container">
+    <div class="form-title">
+        <i class="fa-solid fa-object-group"></i>
+        <span id="formTitleText">Create Group</span>
+        <span class="edit-badge" id="editBadge" style="display:none">
+            <i class="fa-solid fa-pen-to-square"></i> EDITING
+        </span>
+    </div>
+    <div id="formMessage"></div>
+    <div class="form-grid">
+        <div class="form-group full-width">
+            <label class="form-label">Group Name <span class="required">*</span></label>
+            <input class="form-input" id="groupName" placeholder="e.g. Production Stack" />
+        </div>
+    </div>
+    <div class="group-members-section">
+        <div class="group-members-header">
+            <span class="group-members-title">Connections in this group</span>
+            <button class="conn-btn secondary" id="addToGroupBtn">
+                <i class="fa-solid fa-plus"></i> Add Connection
+            </button>
+        </div>
+        <div class="group-members-list" id="groupMembersList">
+            <div class="conn-empty">No connections added yet</div>
+        </div>
+    </div>
+    <div class="form-actions">
+        <button class="conn-btn secondary" id="cancelGroupBtn">Cancel</button>
+        <button class="conn-btn primary" id="saveGroupBtn"><i class="fa-solid fa-check" id="saveGroupIcon"></i> <span id="saveGroupLabel">Create</span></button>
+    </div>
+</div>

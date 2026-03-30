@@ -21,9 +21,12 @@ USER_CONFIG_FILE = "user.json"
 CONNECTIONS_FILE = "connections"
 SETTINGS_FILE = "settings.yaml"
 
+GROUPS_FILE = "user_groups.json"
+
 USER_CONFIG_PATH = os.path.join(CONFIG_PATH, USER_CONFIG_FILE)
 CONNECTIONS_CONFIG_PATH = os.path.join(CONFIG_PATH, CONNECTIONS_FILE)
 SETTINGS_PATH = os.path.join(CONFIG_PATH, SETTINGS_FILE)
+GROUPS_PATH = os.path.join(CONFIG_PATH, GROUPS_FILE)
 DEBUG_MODE = os.getenv("DEBUG_MODE", "0").lower() in ("1", "true", "yes")
 DEBUG_MODE = DEBUG_MODE or sys.gettrace() is not None or any('pydevd' in str(f) for f in sys.modules) # Force debug mode if a debugger is attached
 

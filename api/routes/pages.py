@@ -8,6 +8,7 @@ ALLOWED_PAGES = {
     "create_connection",
     "create_user_connection",
     "dashboard",
+    "edit_group",
     "import_connection",
     "settings",
 }

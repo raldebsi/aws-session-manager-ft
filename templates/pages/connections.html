@@ -14,11 +14,27 @@
         </div>
     </div>
     <div class="conn-list">
-        <div class="conn-list-section-title">Tunnel Configurations</div>
+        <div class="conn-list-section-title conn-list-collapsible" data-target="connectionsList">
+            <i class="fa-solid fa-chevron-down conn-list-chevron"></i>
+            Tunnel Configurations
+        </div>
         <div id="connectionsList"></div>
     </div>
     <div class="conn-list">
-        <div class="conn-list-section-title">User Connections</div>
+        <div class="conn-list-section-title conn-list-collapsible" data-target="userConnectionsList">
+            <i class="fa-solid fa-chevron-down conn-list-chevron"></i>
+            User Connections
+        </div>
         <div id="userConnectionsList"></div>
+    </div>
+    <div class="conn-list">
+        <div class="conn-list-section-title conn-list-collapsible" data-target="groupsList">
+            <i class="fa-solid fa-chevron-down conn-list-chevron"></i>
+            Groups
+            <button class="conn-list-section-action" id="createGroupBtn" title="New group">
+                <i class="fa-solid fa-plus"></i>
+            </button>
+        </div>
+        <div id="groupsList"></div>
     </div>
 </div>
