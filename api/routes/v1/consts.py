@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request
 from src.common import SETTINGS_DEFAULTS
 from src.utils.utils import get_pid_on_port, kill_pid, resolve_absolute_path
 
-consts_bp = Blueprint("consts", __name__, url_prefix="/api/consts")
+consts_bp = Blueprint("consts", __name__, url_prefix="/consts")
 
 CONSTS = {
     "connection_types": [

@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from src.utils.utils import check_hosts_entry, update_hosts
 
-hosts_bp = Blueprint("hosts", __name__, url_prefix="/api/hosts")
+hosts_bp = Blueprint("hosts", __name__, url_prefix="/hosts")
 
 
 @hosts_bp.route("/check", methods=["POST"])

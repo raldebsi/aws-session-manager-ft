@@ -8,7 +8,7 @@ from src.utils.kube import (
     get_k8s_nodes,
 )
 
-kube_bp = Blueprint("kube", __name__, url_prefix="/api/kube")
+kube_bp = Blueprint("kube", __name__, url_prefix="/kube")
 
 
 @kube_bp.route("/context", methods=["GET"])

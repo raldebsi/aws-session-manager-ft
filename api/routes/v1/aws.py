@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify
 
 from src.utils.utils import get_aws_profiles_by_cli, get_aws_profiles_by_file, verify_ssm_plugin
 
-aws_bp = Blueprint("aws", __name__, url_prefix="/api/aws")
+aws_bp = Blueprint("aws", __name__, url_prefix="/aws")
 
 
 @aws_bp.route("/profiles", methods=["GET"])

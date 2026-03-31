@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from src.common import load_settings, save_settings, SETTINGS_DEFAULTS
 
-settings_bp = Blueprint("settings", __name__, url_prefix="/api/settings")
+settings_bp = Blueprint("settings", __name__, url_prefix="/settings")
 
 
 @settings_bp.route("", methods=["GET"])

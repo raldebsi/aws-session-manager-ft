@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, abort
 
-pages_bp = Blueprint("pages", __name__, url_prefix="/api/pages")
+pages_bp = Blueprint("pages", __name__, url_prefix="/pages")
 
 ALLOWED_PAGES = {
     "advanced",

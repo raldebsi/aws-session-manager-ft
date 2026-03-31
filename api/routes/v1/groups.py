@@ -7,7 +7,7 @@ from src.common import GROUPS_PATH, USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
 from src.utils.data_loaders import load_user_config, load_connections
 from src.utils.utils import load_json, save_json, resolve_absolute_path
 
-groups_bp = Blueprint("groups", __name__, url_prefix="/api/groups")
+groups_bp = Blueprint("groups", __name__, url_prefix="/groups")
 
 
 def _load_groups() -> dict:

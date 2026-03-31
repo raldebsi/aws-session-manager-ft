@@ -4,7 +4,7 @@ from src.common import USER_CONFIG_PATH, CONNECTIONS_CONFIG_PATH
 from src.utils.data_loaders import load_user_config, load_connections
 from src.models.config import SSMUserConfig, SSMConnectionConfig
 
-connections_bp = Blueprint("connections", __name__, url_prefix="/api/connections")
+connections_bp = Blueprint("connections", __name__, url_prefix="/connections")
 
 
 def _load_configs():

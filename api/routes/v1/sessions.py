@@ -7,7 +7,7 @@ from src.utils.data_loaders import load_connections, load_user_config
 from src.utils.kube import get_k8s_nodes, k8s_health_check
 from src.utils.utils import get_pid_on_port, tcp_health_check
 
-sessions_bp = Blueprint("sessions", __name__, url_prefix="/api/sessions")
+sessions_bp = Blueprint("sessions", __name__, url_prefix="/sessions")
 
 
 def _is_owned_pid(our_pid, port_pid):

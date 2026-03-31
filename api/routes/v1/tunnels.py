@@ -8,7 +8,7 @@ from src.utils.data_loaders import load_connections, load_user_config
 from src.utils.kube import k8s_health_check, start_eks_tunnel, start_ssm_tunnel
 from src.utils.utils import logger, tcp_health_check
 
-tunnels_bp = Blueprint("tunnels", __name__, url_prefix="/api/tunnels")
+tunnels_bp = Blueprint("tunnels", __name__, url_prefix="/tunnels")
 
 DEFAULT_PORTS = {"eks": 443, "rds": 5432}
 

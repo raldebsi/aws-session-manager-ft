@@ -8,7 +8,7 @@ from src.utils.data_loaders import load_user_config, load_connections
 from src.utils.kube import k8s_health_check, start_eks_tunnel, start_ssm_tunnel
 from src.utils.utils import get_pid_on_port, kill_pid, tcp_health_check
 
-pipelines_bp = Blueprint("pipelines", __name__, url_prefix="/api/pipelines")
+pipelines_bp = Blueprint("pipelines", __name__, url_prefix="/pipelines")
 
 
 @pipelines_bp.route("/connect", methods=["POST"])

@@ -5,18 +5,8 @@ import time
 
 from flask import Flask, jsonify, render_template, request as flask_request
 
-from api.routes.aws import aws_bp
-from api.routes.configs import configs_bp
-from api.routes.connections import connections_bp
-from api.routes.groups import groups_bp
-from api.routes.consts import consts_bp
-from api.routes.hosts import hosts_bp
-from api.routes.kube import kube_bp
-from api.routes.pages import pages_bp
-from api.routes.sessions import sessions_bp
-from api.routes.settings import settings_bp
-from api.routes.tunnels import tunnels_bp
-from api.routes.pipelines import pipelines_bp
+from api.routes.active import active_bp
+from api.routes.v1 import v1_bp
 
 def create_app():
     if hasattr(sys, '_MEIPASS'):
@@ -30,18 +20,8 @@ def create_app():
     app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
     app.jinja_env.cache = None  # Disable Jinja template caching
 
-    app.register_blueprint(aws_bp)
-    app.register_blueprint(configs_bp)
-    app.register_blueprint(groups_bp)
-    app.register_blueprint(connections_bp)
-    app.register_blueprint(consts_bp)
-    app.register_blueprint(hosts_bp)
-    app.register_blueprint(kube_bp)
-    app.register_blueprint(pages_bp)
-    app.register_blueprint(sessions_bp)
-    app.register_blueprint(settings_bp)
-    app.register_blueprint(tunnels_bp)
-    app.register_blueprint(pipelines_bp)
+    app.register_blueprint(active_bp)  # /api — public-facing, version-agnostic
+    app.register_blueprint(v1_bp)      # /api/v1 — explicit v1 access
 
     _api_logger = logging.getLogger("api")
 

@@ -13,7 +13,7 @@ from src.models.config import SSMConnection, SSMConnectionConfig, SSMUserConfig,
 from src.utils.data_loaders import load_connections, load_user_config
 from src.utils.utils import resolve_absolute_path, save_json
 
-configs_bp = Blueprint("configs", __name__, url_prefix="/api/configs")
+configs_bp = Blueprint("configs", __name__, url_prefix="/configs")
 
 
 def _load_configs():
