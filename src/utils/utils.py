@@ -157,14 +157,27 @@ def get_pid_on_port(port: int) -> int:
                         return pid
         else:
             # Linux / macOS: use lsof — check both localhost and wildcard
-            for addr in [f"TCP@127.0.0.1:{port}", f"TCP@0.0.0.0:{port}"]:
+            try:
+                for addr in [f"TCP@127.0.0.1:{port}", f"TCP@0.0.0.0:{port}"]:
+                    result = subprocess.run(
+                        ["lsof", "-i", addr, "-t", "-sTCP:LISTEN"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    pids = result.stdout.strip().splitlines()
+                    if pids:
+                        return int(pids[0])
+            except FileNotFoundError:
+                # lsof not available — fallback to ss (iproute2)
                 result = subprocess.run(
-                    ["lsof", "-i", addr, "-t", "-sTCP:LISTEN"],
+                    ["ss", "-tlnp", f"sport = :{port}"],
                     capture_output=True, text=True, timeout=5
                 )
-                pids = result.stdout.strip().splitlines()
-                if pids:
-                    return int(pids[0])
+                for line in result.stdout.splitlines():
+                    if f":{port}" in line and "pid=" in line:
+                        import re
+                        match = re.search(r"pid=(\d+)", line)
+                        if match:
+                            return int(match.group(1))
     except Exception as e:
         logger.error(f"Failed to detect PID on port {port}: {e}")
 

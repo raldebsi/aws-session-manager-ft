@@ -1,8 +1,5 @@
 import os
-import threading
 import time
-import tkinter as tk
-from tkinter import filedialog
 
 from flask import Blueprint, jsonify, request
 
@@ -180,8 +177,19 @@ def append_tunnel_log(tunnel_id):
 
 @tunnels_bp.route("/<path:tunnel_id>/logs/save", methods=["POST"])
 def save_tunnel_logs(tunnel_id):
-    """Save backend tunnel logs via native folder picker. Returns folder + prefix for client to save its own file."""
+    """Save backend tunnel logs to a given folder.
+
+    Body: {"folder": "/path/to/dir"}
+    The frontend should call /api/consts/browse-folder first to get the folder.
+    """
     from datetime import datetime
+
+    data = request.get_json(force=True)
+    folder = data.get("folder")
+    if not folder:
+        return jsonify({"error": "Required: folder (use /api/consts/browse-folder first)"}), 400
+    if not os.path.isdir(folder):
+        return jsonify({"error": f"Directory not found: {folder}"}), 400
 
     logs, _ = tunnel_manager.get_logs(tunnel_id)
     if logs is None:
@@ -197,38 +205,13 @@ def save_tunnel_logs(tunnel_id):
     prefix = f"{tunnel_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     filename = f"{prefix}_system.log"
 
-    # Run folder dialog on a separate thread to avoid blocking Flask
-    result = {}
-    def open_dialog():
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes('-topmost', True)
-            folder = filedialog.askdirectory(
-                title=f"Select folder to save logs — {tunnel_id}",
-                initialdir=os.getcwd(),
-            )
-            root.destroy()
-            if folder:
-                filepath = os.path.join(folder, filename)
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(content)
-                result["folder"] = folder
-                result["prefix"] = prefix
-            else:
-                result["cancelled"] = True
-        except Exception as e:
-            result["error"] = str(e)
-
-    dialog_thread = threading.Thread(target=open_dialog)
-    dialog_thread.start()
-    dialog_thread.join(timeout=60)
-
-    if "error" in result:
-        logger.error(f"Failed to save logs for {tunnel_id}: {result['error']}")
-        return jsonify({"error": result["error"]}), 500
-    if result.get("cancelled"):
-        return jsonify({"status": "cancelled"}), 200
-    return jsonify({"status": "saved", "folder": result["folder"], "prefix": result["prefix"]})
+    try:
+        filepath = os.path.join(folder, filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return jsonify({"status": "saved", "folder": folder, "prefix": prefix})
+    except Exception as e:
+        logger.error(f"Failed to save logs for {tunnel_id}: {e}")
+        return jsonify({"error": str(e)}), 500
 
 

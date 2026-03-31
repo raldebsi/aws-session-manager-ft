@@ -1167,26 +1167,33 @@ async function renderLogsPage() {
                 showToast(`Saved in ${data.folder}`, 'success');
             } else {
                 const tunnelId = activeTab.key;
-                const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, { method: 'POST' });
+                const folderRes = await fetch('/api/consts/browse-folder', { method: 'POST' });
+                const folderData = await folderRes.json();
+                if (folderData.status === 'cancelled') return;
+                if (!folderData.folder) { showToast(folderData.error || 'Failed', 'error'); return; }
+                const folder = folderData.folder;
+
+                // Save backend logs
+                const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder }),
+                });
                 const data = await res.json();
-                if (data.status === 'cancelled') return;
+                const prefix = data.prefix || `${tunnelId}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+
                 if (data.status === 'saved') {
-                    showToast(`Saved in ${data.folder} (${data.prefix})`, 'success');
+                    showToast(`Saved in ${folder} (${prefix})`, 'success');
                 } else {
-                    // Tunnel not found — fall back to folder picker for client logs
+                    // Tunnel not found — save client logs only
                     const cTab = consoleTabs[activeTab.key];
                     if (!cTab || !cTab.logs.length) { showToast('No logs to save', 'warning'); return; }
-                    const folderRes = await fetch('/api/consts/browse-folder', { method: 'POST' });
-                    const folderData = await folderRes.json();
-                    if (folderData.status === 'cancelled') return;
-                    if (!folderData.folder) { showToast(folderData.error || 'Failed', 'error'); return; }
-                    const prefix = `${activeTab.key}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
                     await fetch('/api/consts/save-file', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ folder: folderData.folder, filename: `${prefix}_client.log`, content: formatConsoleLogs(cTab) }),
+                        body: JSON.stringify({ folder, filename: `${prefix}_client.log`, content: formatConsoleLogs(cTab) }),
                     });
-                    showToast(`Saved in ${folderData.folder} (${prefix})`, 'success');
+                    showToast(`Saved in ${folder} (${prefix})`, 'success');
                 }
             }
         } catch (err) { showToast(err.message, 'error'); }
@@ -3091,19 +3098,22 @@ document.getElementById('consoleSaveBtn').addEventListener('click', async () => 
             const tunnelId = session?.tunnelId || activeConsoleKey;
             let folder, prefix;
 
-            const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, { method: 'POST' });
+            const folderRes = await fetch('/api/consts/browse-folder', { method: 'POST' });
+            const folderData = await folderRes.json();
+            if (folderData.status === 'cancelled') return;
+            if (!folderData.folder) { showToast(folderData.error || 'Failed', 'error'); return; }
+            folder = folderData.folder;
+
+            // Save backend logs
+            const res = await fetch(`/api/tunnels/${tunnelId}/logs/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder }),
+            });
             const data = await res.json();
-            if (data.status === 'cancelled') return;
             if (data.status === 'saved') {
-                folder = data.folder;
                 prefix = data.prefix;
             } else {
-                // Tunnel not found or no backend logs — pick folder for client logs only
-                const folderRes = await fetch('/api/consts/browse-folder', { method: 'POST' });
-                const folderData = await folderRes.json();
-                if (folderData.status === 'cancelled') return;
-                if (!folderData.folder) { showToast(folderData.error || 'Failed', 'error'); return; }
-                folder = folderData.folder;
                 prefix = `${activeConsoleKey}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
             }
 

@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api import create_app
-from src.common import DEBUG_MODE, tunnel_manager
+from src.common import BIND_ALL, DEBUG_MODE, tunnel_manager
 
 shutdown_handler = tunnel_manager.get_shutdown_handler()
 atexit.register(shutdown_handler) # Reregister the handler to avoid using the handler's signal calls in werkzeug
@@ -15,14 +15,14 @@ app = create_app()
 
 if __name__ == "__main__":
     app_config = {
-        "host": "127.0.0.1",
+        "host": "0.0.0.0" if BIND_ALL else "127.0.0.1",
         "port": 8000,
         "debug": DEBUG_MODE,
         "use_reloader": False,
     }
     if DEBUG_MODE:
         app_config.update({
-            "debug": True,
+            # "debug": True,
             "host": "0.0.0.0",  # Allow external access in debug mode only
         })
 

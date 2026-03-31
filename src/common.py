@@ -29,6 +29,7 @@ SETTINGS_PATH = os.path.join(CONFIG_PATH, SETTINGS_FILE)
 GROUPS_PATH = os.path.join(CONFIG_PATH, GROUPS_FILE)
 DEBUG_MODE = os.getenv("DEBUG_MODE", "0").lower() in ("1", "true", "yes")
 DEBUG_MODE = DEBUG_MODE or sys.gettrace() is not None or any('pydevd' in str(f) for f in sys.modules) # Force debug mode if a debugger is attached
+BIND_ALL = os.getenv("BIND_ALL", "0").lower() in ("1", "true", "yes")
 
 # --- Settings ---
 

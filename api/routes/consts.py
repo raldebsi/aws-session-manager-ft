@@ -1,6 +1,4 @@
 import os
-import tkinter as tk
-from tkinter import filedialog
 
 import pyperclip
 from flask import Blueprint, jsonify, request
@@ -148,6 +146,8 @@ def browse_save():
     filetypes = data.get("filetypes", [["All files", "*.*"]])
 
     try:
+        import tkinter as tk
+        from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
         root.attributes('-topmost', True)
@@ -177,6 +177,8 @@ def browse_folder():
         initial_dir = os.getcwd()
 
     try:
+        import tkinter as tk
+        from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
         root.attributes('-topmost', True)
