@@ -60,7 +60,7 @@ def create_app():
 
     @app.route("/")
     def index():
-        return render_template("index.html", cache_version=_cache_version)
+        return render_template("index.html", cache_version=_cache_version, native=app.config.get("NATIVE_WINDOW", False))
 
     @app.route("/health")
     def health():

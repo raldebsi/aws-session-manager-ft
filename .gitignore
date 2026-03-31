@@ -12,4 +12,4 @@ scripts
 
 .claude
 
-!requirements.txt
+!requirements*.txt

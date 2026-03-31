@@ -21,8 +21,21 @@ A web-based and CLI tool for managing AWS SSM (Systems Manager) port-forwarding 
 
 ## Setup
 
+Install only what you need:
+
+| File | For | Installs |
+|---|---|---|
+| `requirements-cli.txt` | CLI only (`main.py`) | psutil, PyYAML |
+| `requirements-web.txt` | Web UI (`api/app.py`) | CLI deps + Flask, pyperclip |
+| `requirements-gui.txt` | Desktop app (`gui.py`) | Web deps + pywebview |
+| `requirements.txt` | Everything | All of the above |
+
 ```bash
-pip install -r requirements.txt
+# Pick one:
+pip install -r requirements-cli.txt   # CLI only
+pip install -r requirements-web.txt   # Web UI
+pip install -r requirements-gui.txt   # Desktop app
+pip install -r requirements.txt       # All
 ```
 
 ### Configuration
@@ -36,16 +49,14 @@ All configuration lives in the `config/` directory:
 | `config/settings.yaml` | App settings (polling interval, timeouts, limits) |
 | `config/user_groups.json` | Connection groups |
 
-### Running the GUI
+
+### Running the Web UI
 
 ```bash
 python api/app.py
 ```
 
 Opens a web UI at `http://127.0.0.1:8000`. Use the sidebar to navigate between Dashboard, Connections, Logs, Advanced, and Settings.
-
-Set `DEBUG_MODE=1` to enable debug logging.
-Set `BIND_ALL=1` to listen on `0.0.0.0` instead of `127.0.0.1`.
 
 ### Running the CLI
 
@@ -54,6 +65,25 @@ python main.py
 ```
 
 Presents an interactive menu to select a connection, starts the tunnel, and verifies connectivity.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `DEBUG_MODE` | `0` | Enable debug logging |
+| `BIND_ALL` | `0` | Listen on `0.0.0.0` instead of `127.0.0.1` |
+
+### Docker
+
+```bash
+# Linux / macOS
+./run.sh
+
+# Windows
+run.cmd
+```
+
+Runs the web UI in a container with AWS CLI, session-manager-plugin, and kubectl pre-installed. Mounts `~/.aws` (read-only), `~/.kube` (read-write), and `./config` for persistence. Sets `BIND_ALL=1` so the Flask server is accessible from the host.
 
 ## Quirks and notes
 

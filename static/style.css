@@ -2232,3 +2232,13 @@ hr {
         margin: 0;
     }
 }
+
+/* Native window mode (pywebview) — fill the entire window */
+body.native .app-container {
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+}
