@@ -1,9 +1,6 @@
 import atexit
 import os
-import sys
 
-# Ensure project root is on the path so src.* imports work
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api import create_app
 from src.common import BIND_ALL, DEBUG_MODE, tunnel_manager
@@ -27,4 +24,3 @@ if __name__ == "__main__":
         })
 
     app.run(host=app_config["host"], port=app_config["port"], debug=app_config["debug"], use_reloader=app_config["use_reloader"])
-    

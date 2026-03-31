@@ -11,10 +11,10 @@
             "cwd": "${workspaceFolder}"
         },
         {
-            "name": "Python: Run api.app module",
+            "name": "Python: Run app module",
             "type": "python",
             "request": "launch",
-            "module": "api.app",
+            "module": "app",
             "justMyCode": true,
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
