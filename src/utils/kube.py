@@ -107,7 +107,10 @@ def update_kube_cluster_config(config_path, local_server, local_port, cluster_al
             else:
                 if cluster_port:
                     if int(cluster_port) != 443:
-                        continue  # Different port, leave it
+                        # Different non-443 port — skip even for TLS SNI localhost entries.
+                        # Another tool (e.g. Lens) may have its own tunnel on a different port
+                        # pointing at the same endpoint; overwriting it would break their setup.
+                        continue
                 else:
                     edit_candidate_indices["same_port"].append(idx)
                     # Do not edit it now, wait until other higher priority target is found, else edit

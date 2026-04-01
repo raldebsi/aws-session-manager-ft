@@ -7,6 +7,7 @@ from flask import Flask, jsonify, render_template, request as flask_request
 
 from api.routes.active import active_bp
 from api.routes.v1 import v1_bp
+from api.routes.v2 import v2_bp
 
 def create_app():
     if hasattr(sys, '_MEIPASS'):
@@ -22,6 +23,7 @@ def create_app():
 
     app.register_blueprint(active_bp)  # /api — public-facing, version-agnostic
     app.register_blueprint(v1_bp)      # /api/v1 — explicit v1 access
+    app.register_blueprint(v2_bp)      # /api/v2 — explicit v2 access
 
     _api_logger = logging.getLogger("api")
 
