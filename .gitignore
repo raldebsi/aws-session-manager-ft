@@ -12,5 +12,6 @@ scripts
 *.bkp
 *.old
 .claude
+outputs
 
 !requirements*.txt

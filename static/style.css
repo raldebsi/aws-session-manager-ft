@@ -838,10 +838,23 @@ hr {
     gap: 0;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
     align-items: center;
     max-width: 100%;
+    overflow: hidden;
+}
+
+.logs-page-tabs-scroll {
+    display: flex;
+    gap: 0;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+}
+.logs-page-tabs-scroll::-webkit-scrollbar {
+    display: none;
 }
 
 .logs-page-actions {
@@ -2281,6 +2294,35 @@ hr {
         border-radius: 0;
         margin: 0;
     }
+}
+
+/* Debug: floating tab-spawn button */
+#debugSpawnTab {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 99999;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    display: none; /* hidden by default, Ctrl+Shift+D to toggle */
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: background 0.15s;
+}
+#debugSpawnTab.visible {
+    display: flex;
+}
+#debugSpawnTab:hover {
+    background: #1d4ed8;
 }
 
 /* Native window mode (pywebview) — fill the entire window */

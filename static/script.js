@@ -1062,6 +1062,24 @@ async function renderLogsPage() {
     const tabsBar = document.createElement('div');
     tabsBar.className = 'logs-page-tabs';
 
+    const leftArrow = document.createElement('button');
+    leftArrow.className = 'tabs-arrow';
+    leftArrow.disabled = true;
+    leftArrow.title = 'Scroll tabs left';
+    leftArrow.innerHTML = '<i class="fa-solid fa-chevron-left"></i>';
+    tabsBar.appendChild(leftArrow);
+
+    const tabsScroll = document.createElement('div');
+    tabsScroll.className = 'logs-page-tabs-scroll';
+    tabsBar.appendChild(tabsScroll);
+
+    const rightArrow = document.createElement('button');
+    rightArrow.className = 'tabs-arrow';
+    rightArrow.disabled = true;
+    rightArrow.title = 'Scroll tabs right';
+    rightArrow.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
+    tabsBar.appendChild(rightArrow);
+
     // Gather keys that have backend logs (try all sessions — tunnel may persist from previous run)
     const tunnelKeys = [];
     const logFetches = sessions.map(async (s) => {
@@ -1093,7 +1111,7 @@ async function renderLogsPage() {
             logsPageActiveKey = t.key;
             refreshLogsPageBody(container, allTabs);
         });
-        tabsBar.appendChild(btn);
+        tabsScroll.appendChild(btn);
     });
 
     // Action buttons
@@ -1105,6 +1123,52 @@ async function renderLogsPage() {
         <button class="conn-action-btn logs-page-save-btn" title="Save logs"><i class="fa-solid fa-floppy-disk"></i></button>
     `;
     tabsBar.appendChild(actionsBar);
+
+    // Arrow scroll logic
+    function updateLogsTabArrows() {
+        const atStart = tabsScroll.scrollLeft <= 0;
+        const atEnd = tabsScroll.scrollLeft + tabsScroll.clientWidth >= tabsScroll.scrollWidth - 1;
+        leftArrow.disabled = atStart;
+        rightArrow.disabled = atEnd;
+    }
+
+    tabsScroll.addEventListener('scroll', updateLogsTabArrows);
+
+    leftArrow.addEventListener('click', () => {
+        const tabs = Array.from(tabsScroll.querySelectorAll('.logs-page-tab'));
+        let target = null;
+        for (let i = tabs.length - 1; i >= 0; i--) {
+            if (tabs[i].offsetLeft < tabsScroll.scrollLeft - 1) {
+                target = tabs[i];
+                break;
+            }
+        }
+        if (target) {
+            tabsScroll.scrollTo({ left: target.offsetLeft, behavior: 'smooth' });
+        } else {
+            tabsScroll.scrollTo({ left: 0, behavior: 'smooth' });
+        }
+    });
+
+    rightArrow.addEventListener('click', () => {
+        const tabs = Array.from(tabsScroll.querySelectorAll('.logs-page-tab'));
+        const visibleRight = tabsScroll.scrollLeft + tabsScroll.clientWidth;
+        let target = null;
+        for (const tab of tabs) {
+            if (tab.offsetLeft + tab.offsetWidth > visibleRight + 1) {
+                target = tab;
+                break;
+            }
+        }
+        if (target) {
+            const scrollTo = target.offsetLeft + target.offsetWidth - tabsScroll.clientWidth;
+            tabsScroll.scrollTo({ left: scrollTo, behavior: 'smooth' });
+        }
+    });
+
+    // Update arrows on resize and when tabs are added/removed
+    new ResizeObserver(updateLogsTabArrows).observe(tabsScroll);
+    new MutationObserver(updateLogsTabArrows).observe(tabsScroll, { childList: true });
 
     container.appendChild(tabsBar);
 
@@ -3235,3 +3299,42 @@ async function init() {
 }
 
 init();
+
+// --- Debug: spawn fake tabs for scroll testing (Ctrl+Shift+D to toggle) ---
+(() => {
+    let debugTabCounter = 0;
+    const btn = document.getElementById('debugSpawnTab');
+    if (!btn) return;
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+            btn.classList.toggle('visible');
+        }
+    });
+    btn.addEventListener('click', () => {
+        debugTabCounter++;
+
+        // Spawn a console tab
+        const key = `debug-tab-${debugTabCounter}`;
+        const tab = ensureConsoleTab(key);
+        tab.open = true;
+        appendLog(tab, { stream: 'system',   text: `[debug] Tab "${key}" created` });
+        appendLog(tab, { stream: 'frontend', text: `[debug] Fake log entry 1 for ${key}` });
+        appendLog(tab, { stream: 'frontend', text: `[debug] Fake log entry 2 for ${key}` });
+        activeConsoleKey = key;
+        renderConsoleTabs();
+        refreshConsoleBody();
+
+        // Also spawn a logs page tab if the logs page is currently visible
+        const logsTabsScroll = document.querySelector('.logs-page-tabs-scroll');
+        if (logsTabsScroll) {
+            const tabBtn = document.createElement('button');
+            tabBtn.className = 'logs-page-tab';
+            tabBtn.textContent = `Debug ${debugTabCounter}`;
+            tabBtn.addEventListener('click', () => {
+                logsTabsScroll.querySelectorAll('.logs-page-tab').forEach(t => t.classList.remove('active'));
+                tabBtn.classList.add('active');
+            });
+            logsTabsScroll.appendChild(tabBtn);
+        }
+    });
+})();
