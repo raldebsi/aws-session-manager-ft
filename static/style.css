@@ -404,8 +404,25 @@ hr {
 .dashboard-pane {
     display: flex;
     flex-direction: column;
+    padding: 0;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.dashboard-header {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
-    padding: 16px 0;
+    padding: 16px 0 12px 0;
+}
+
+.dashboard-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 16px;
 }
 
 /* --- Dashboard statistics cards --- */
@@ -1221,6 +1238,11 @@ hr {
     padding: 16px 32px 0 32px;
     box-sizing: border-box;
     overflow-y: auto;
+}
+
+/* When the dashboard is loaded, it manages its own scrolling */
+.main-content-body:has(.dashboard-pane) {
+    overflow-y: hidden;
 }
 
 /* --- Pane placeholders --- */
