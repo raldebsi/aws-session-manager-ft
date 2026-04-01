@@ -1402,7 +1402,67 @@ function renderConsoleTabs() {
     }
 
     updateConsolePanelVisibility();
+    updateTabArrows();
 }
+
+// --- Console tab scroll arrows ---
+function updateTabArrows() {
+    const tabsEl = document.getElementById('consoleTabs');
+    const leftBtn = document.getElementById('tabsArrowLeft');
+    const rightBtn = document.getElementById('tabsArrowRight');
+    if (!tabsEl || !leftBtn || !rightBtn) return;
+
+    const atStart = tabsEl.scrollLeft <= 0;
+    const atEnd = tabsEl.scrollLeft + tabsEl.clientWidth >= tabsEl.scrollWidth - 1;
+
+    leftBtn.disabled = atStart;
+    rightBtn.disabled = atEnd;
+}
+
+(function initTabArrows() {
+    const tabsEl = document.getElementById('consoleTabs');
+    const leftBtn = document.getElementById('tabsArrowLeft');
+    const rightBtn = document.getElementById('tabsArrowRight');
+    if (!tabsEl || !leftBtn || !rightBtn) return;
+
+    tabsEl.addEventListener('scroll', updateTabArrows);
+
+    leftBtn.addEventListener('click', () => {
+        const tabs = Array.from(tabsEl.querySelectorAll('.console-tab'));
+        // Find the last tab whose left edge is before the visible area
+        let target = null;
+        for (let i = tabs.length - 1; i >= 0; i--) {
+            if (tabs[i].offsetLeft < tabsEl.scrollLeft - 1) {
+                target = tabs[i];
+                break;
+            }
+        }
+        if (target) {
+            // Scroll so this tab's left edge is flush with the container's left
+            tabsEl.scrollTo({ left: target.offsetLeft, behavior: 'smooth' });
+        } else {
+            tabsEl.scrollTo({ left: 0, behavior: 'smooth' });
+        }
+    });
+
+    rightBtn.addEventListener('click', () => {
+        const tabs = Array.from(tabsEl.querySelectorAll('.console-tab'));
+        const visibleRight = tabsEl.scrollLeft + tabsEl.clientWidth;
+        // Find the first tab whose right edge is beyond the visible area
+        let target = null;
+        for (const tab of tabs) {
+            if (tab.offsetLeft + tab.offsetWidth > visibleRight + 1) {
+                target = tab;
+                break;
+            }
+        }
+        if (target) {
+            // Scroll just enough so this tab's right edge is flush with the container's right
+            const scrollTo = target.offsetLeft + target.offsetWidth - tabsEl.clientWidth;
+            tabsEl.scrollTo({ left: scrollTo, behavior: 'smooth' });
+        }
+    });
+})();
 
 const STREAM_PREFIXES = {
     stdout:   '[tunnel] ',

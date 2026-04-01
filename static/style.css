@@ -674,6 +674,7 @@ hr {
     flex-direction: column;
     height: 180px;
     flex-shrink: 0;
+    min-width: 0;
 }
 
 .console-header {
@@ -700,6 +701,32 @@ hr {
     overflow-x: auto;
     flex: 1;
     min-width: 0;
+    scroll-behavior: smooth;
+    scrollbar-width: none; /* Firefox */
+}
+.console-tabs::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+}
+
+.tabs-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--inactive-text);
+    cursor: pointer;
+    padding: 0 4px;
+    font-size: 0.7em;
+    flex-shrink: 0;
+    transition: color 0.15s, opacity 0.15s;
+}
+.tabs-arrow:hover:not(:disabled) {
+    color: var(--text);
+}
+.tabs-arrow:disabled {
+    opacity: 0.25;
+    cursor: default;
 }
 
 .console-tab {
@@ -1197,6 +1224,7 @@ hr {
 
 .main-content {
     flex: 1;
+    min-width: 0; /* allow shrinking below content width so tabs don't overflow */
     background: var(--highlight-fg);
     padding: 0;
     display: flex;

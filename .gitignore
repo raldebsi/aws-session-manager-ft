@@ -7,9 +7,10 @@ __pycache__/
 config
 scripts
 *.txt
-*.bkp
 .env
 
+*.bkp
+*.old
 .claude
 
 !requirements*.txt
